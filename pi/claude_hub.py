@@ -138,6 +138,12 @@ class ClaudeHub:
             ok = False
         if not ok:
             raise PermissionError("bad signature")
+        with self.lock:                                      # a signed message works once (no replay within the window)
+            now = time.time()
+            self.used_sigs = {k: t for k, t in getattr(self, "used_sigs", {}).items() if now - t < SIG_MAX_AGE * 2}
+            if sig_b64 in self.used_sigs:
+                raise PermissionError("this signed request was already used")
+            self.used_sigs[sig_b64] = now
 
     def enqueue(self, item: dict) -> None:
         with self.lock:

@@ -113,3 +113,9 @@ Not verified / limits:
 - Signing key v2: fingerprint, strong face scan, or phone PIN (Filip chose this; Huawei face unlock only counts if the phone rates it Class 3). The key is re-registered automatically.
 - Notification Allow / Deny for permission requests (prompt first), tap opens the session; Share target for text and links (inbox or Desktop session).
 - Verified on the emulator with sample cards; real biometric and Huawei behaviour untested.
+
+## Update 2026-11-12 (app 0.9.3)
+- Verified: Start from the phone (typed message arrived), question + permission answers, typing, self-update 0.9.1 -> 0.9.2.
+- Fixed: proposal cards were missed because the transcript tail was full of request-blob lines (now skipped, read deeper, cached per session); Home and widget now count questions, permissions, new-session cards and approvals as waiting; the session view no longer jumps to the bottom while reading older rows; added a 'Claude is working' line and a PC-not-reporting warning; signed requests can be used only once (replay protection).
+- Tests run: 13 signature security checks (replay, tamper, old, wrong key, mismatched decision), hook modes (auto read-only, waiting, disabled), every Pi endpoint, emulator tour of all tabs and the session view.
+- Still unverified on the real phone: strong face unlock / PIN prompt, mic button without Google speech.

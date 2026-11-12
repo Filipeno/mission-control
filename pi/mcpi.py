@@ -488,6 +488,14 @@ def build_home(state: AppState) -> dict:
     room = st.get("room") or {}
     sessions = agent.get("sessions") or []
     waiting = [s for s in sessions if s.get("status") == "waiting"]
+    # Requests the phone can answer (questions, permissions, new-session cards, approvals) count as waiting too.
+    lv = state.sessions.list_view()
+    ask_titles = [g.get("session", "Claude") for g in lv["gates"]] + [p.get("session", "Claude") for p in lv["proposals"]] \
+        + [a.get("title", "Approval") for a in state.claude.view()["approvals"]]
+    seen_t, titles = set(), []
+    for t in [(s.get("title") or s.get("name") or "Claude")[:80] for s in waiting] + ask_titles:
+        if t not in seen_t:
+            seen_t.add(t); titles.append(t)
     return {
         "pc": {"online": bool(st.get("pc", {}).get("online")), "since": state.pc_state.get("since"),
                "ping_ms": st.get("pc", {}).get("ping_ms"), "last_wake": st.get("last_wake"),
@@ -504,8 +512,7 @@ def build_home(state: AppState) -> dict:
                  "wake_on_enter": (room.get("settings") or {}).get("wake_on_enter"),
                  "block_sleep": (room.get("settings") or {}).get("block_sleep")},
         "lights": st.get("pc_lights") or {},
-        "claude": {"sessions": len(sessions), "waiting": len(waiting),
-                   "waiting_titles": [(s.get("title") or s.get("name") or "Claude")[:80] for s in waiting][:5]},
+        "claude": {"sessions": len(lv["sessions"]) or len(sessions), "waiting": len(titles), "waiting_titles": titles[:5]},
         "pi": pi_health(),
         "recent": (st.get("notify") or {}).get("recent", [])[:10],
         "push": {"devices": len(state.pusher.endpoints),
@@ -1024,7 +1031,8 @@ def make_app(state: AppState):
         waiting = sum(1 for s in sessions if s.get("status") == "waiting")
         working = sum(1 for s in sessions if s.get("status") not in ("waiting", "shell", "idle", "done", None))
         cv = state.claude.view()
-        pend = len(cv.get("pending") or cv.get("approvals") or [])
+        lv = state.sessions.list_view()
+        pend = len(cv.get("pending") or cv.get("approvals") or []) + len(lv["gates"]) + len(lv["proposals"])   # all requests for the phone
         lists = state.docs.summary()["checklists"]          # newest first
         cl = next((c for c in lists if not c.get("finished_at")), lists[0] if lists else None)
         return {"pc": {"online": bool(st.get("pc", {}).get("online")), "helper": time.time() - state.helper_at < HELPER_STALE},

@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -228,7 +229,14 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
     }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val rows = data?.optJSONArray("rows").objs()
-    LaunchedEffect(rows.size) { scroll.animateScrollTo(scroll.maxValue) }
+    // Follow new activity only while the user is at the bottom; reading older rows must not jump.
+    var stick by remember { mutableStateOf(true) }
+    LaunchedEffect(scroll) {
+        androidx.compose.runtime.snapshotFlow { scroll.isScrollInProgress }.collect { moving ->
+            if (!moving) stick = scroll.maxValue - scroll.value < 300
+        }
+    }
+    LaunchedEffect(rows.size, data?.optJSONArray("gates")?.length()) { if (stick) scroll.animateScrollTo(scroll.maxValue) }
 
     val s = data?.optJSONObject("session")
     fun done(msg: String): (String?) -> Unit = { err ->
@@ -266,8 +274,14 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
             if (d != null) {
                 if (s == null) Text(if (d.optJSONArray("gates").objs().isEmpty()) "This session is not running any more."
                     else "A background Claude session (not in the list) asks you:", color = Mc.Warn, fontSize = 14.sp)
+                if (!d.optBoolean("fresh", true)) Text("The PC is not reporting right now (asleep or helper off). This may be old.", color = Mc.Warn, fontSize = 13.sp)
                 if (rows.isEmpty() && s != null) Text("Loading activity from the PC…", color = Mc.Muted, fontSize = 14.sp)
                 groupRows(rows).forEach { g -> if (g.size == 1 && g[0].optString("role") != "tool") ActivityRow(g[0]) else ToolGroup(g) }
+                if (s?.optString("state") == "working") {
+                    val a by androidx.compose.animation.core.rememberInfiniteTransition(label = "w").animateFloat(0.35f, 1f,
+                        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(900), androidx.compose.animation.core.RepeatMode.Reverse), label = "a")
+                    Text("● Claude is working…", color = Mc.Accent.copy(alpha = a), fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
+                }
                 d.optJSONArray("gates").objs().forEach { g -> GateCard(g, busy) { decision, payload, label ->
                     busy = true
                     signedPost(ctx, label, "gate|${g.optString("id")}|$decision|$payload", "/api/gate/${g.optString("id")}/answer",

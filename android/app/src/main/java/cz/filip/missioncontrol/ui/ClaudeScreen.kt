@@ -469,7 +469,7 @@ private fun IdeaDock(audioMode: Boolean) {
 
     Row(Modifier.fillMaxWidth().background(Mc.Bg).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("Send an idea to Claude…") },
+        OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("Idea for Claude's inbox…") },
             maxLines = 4, shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f))
         val recording = recorder != null
         IconButton(onClick = { mic() }, modifier = Modifier.size(50.dp).clip(RoundedCornerShape(14.dp))

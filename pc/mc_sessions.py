@@ -21,7 +21,7 @@ HOME = Path(os.environ.get("USERPROFILE") or Path.home())
 SESSIONS = HOME / ".claude" / "sessions"
 PROJECTS = HOME / ".claude" / "projects"
 GATE = Path(r"D:\ai-hub\gate")
-TAIL_LIST = 256 * 1024          # bytes read from each transcript for the list (last activity, proposals)
+TAIL_LIST = 4 * 1024 * 1024     # bytes read from a changed transcript for the list (huge request-blob lines are skipped unparsed)
 TAIL_WATCH = 6 * 1024 * 1024    # bytes read for the open session (tool results with pictures are huge)
 MAX_LINE = 256 * 1024           # longer transcript lines (pictures, big tool output) are skipped unparsed
 MAX_ROWS = 80
@@ -65,7 +65,7 @@ def read_tail(path: Path, nbytes: int) -> list:
         return []
     out = []
     for line in data.split(b"\n"):
-        if not line.strip():
+        if not line.strip() or line.startswith(b'{"type":"api-request'):
             continue
         if len(line) > MAX_LINE:
             m = re.search(rb'"tool_use_id":"([^"]+)"', line[:4096])
@@ -269,35 +269,57 @@ def main():
     ap.add_argument("--out", default="")
     a = ap.parse_args()
     result = {"sessions": [], "gates": gates(), "proposals": [], "at": time.time()}
+    cache_path = Path(os.environ.get("TEMP") or ".") / "mc-sessions-cache.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    new_cache = {}
     for s in live_sessions():
         sid = s.get("sessionId")
         tp = find_transcript(sid)
-        entries = read_tail(tp, TAIL_WATCH if sid == a.watch else TAIL_LIST) if tp else []
-        rows, open_ids = build_rows(entries)
-        first_user = next((r["text"] for r in rows if r["role"] == "user"), "")
-        title = s.get("name") if s.get("nameSource") != "derived" and s.get("name") else (cut(first_user, 80) or s.get("name") or "Claude")
+        try:
+            st = tp.stat() if tp else None
+            stamp = [st.st_size, int(st.st_mtime)] if st else [0, 0]
+        except OSError:
+            stamp = [0, 0]
+        c = cache.get(sid)
+        if c and c.get("stamp") == stamp and sid != a.watch:
+            d = c["data"]                                    # transcript unchanged: reuse what was derived from it
+        else:
+            entries = read_tail(tp, TAIL_WATCH if sid == a.watch else TAIL_LIST) if tp else []
+            rows, open_ids = build_rows(entries)
+            first_user = next((r["text"] for r in rows if r["role"] == "user"), "")
+            last = next((r for r in reversed(rows) if r["role"] in ("claude", "tool", "user")), None)
+            pending = None
+            if open_ids:
+                b = list(open_ids.values())[-1]
+                if b.get("name") == "AskUserQuestion":
+                    pending = {"type": "question", "questions": (b.get("input") or {}).get("questions") or []}
+                else:
+                    pending = {"type": "permission", "tool": b.get("name"), "summary": tool_summary(b.get("name", ""), b.get("input"))}
+            title0 = s.get("name") if s.get("nameSource") != "derived" and s.get("name") else (cut(first_user, 80) or s.get("name") or "Claude")
+            d = {"title": cut(title0, 100), "pending": pending, "last": cut(last["text"], 160) if last else "",
+                 "last_role": last["role"] if last else "", "rows_at": rows[-1]["at"] if rows else 0,
+                 "proposals": proposals_from(entries, sid, cut(title0, 100), s.get("cwd") or "")}
+            if sid == a.watch:
+                result["watch"] = {"id": sid, "rows": rows[-MAX_ROWS:]}
+        new_cache[sid] = {"stamp": stamp, "data": d}
         status = s.get("status") or "idle"
         waiting = s.get("waitingFor") or ""
         state = "waiting" if waiting else ("working" if status == "busy" else "idle")
-        pending = None
-        if waiting and open_ids:
-            b = list(open_ids.values())[-1]
-            if b.get("name") == "AskUserQuestion":
-                pending = {"type": "question", "questions": (b.get("input") or {}).get("questions") or []}
-            else:
-                pending = {"type": "permission", "tool": b.get("name"), "summary": tool_summary(b.get("name", ""), b.get("input"))}
-        last = next((r for r in reversed(rows) if r["role"] in ("claude", "tool", "user")), None)
         result["sessions"].append({
-            "id": sid, "local": s.get("hostSessionId") or "", "title": cut(title, 100), "cwd": s.get("cwd") or "",
+            "id": sid, "local": s.get("hostSessionId") or "", "title": d["title"], "cwd": s.get("cwd") or "",
             "state": state, "waiting_for": waiting, "kind": {"claude-desktop": "desktop", "sdk-cli": "remote"}.get(s.get("entrypoint"), "cli"),
             "rc": bool(s.get("bridgeSessionId")), "rc_id": s.get("bridgeSessionId") or "",
-            "updated": max((s.get("statusUpdatedAt") or s.get("updatedAt") or 0) / 1000, rows[-1]["at"] if rows else 0),
-            "last": cut(last["text"], 160) if last else "", "last_role": last["role"] if last else "",
-            "pending": pending,
+            "updated": max((s.get("statusUpdatedAt") or s.get("updatedAt") or 0) / 1000, d["rows_at"]),
+            "last": d["last"], "last_role": d["last_role"], "pending": d["pending"] if waiting else None,
         })
-        result["proposals"] += proposals_from(entries, sid, cut(title, 100), s.get("cwd") or "")
-        if sid == a.watch:
-            result["watch"] = {"id": sid, "rows": rows[-MAX_ROWS:]}
+        result["proposals"] += d["proposals"]
+    try:
+        cache_path.write_text(json.dumps(new_cache), encoding="utf-8")
+    except OSError:
+        pass
     if a.watch and "watch" not in result:
         result["watch"] = {"id": a.watch, "rows": [], "gone": True}
     data = json.dumps(result, ensure_ascii=False).encode("utf-8")
