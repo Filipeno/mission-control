@@ -1,0 +1,4 @@
+# All of these have wheels for the Pi's armv7l / Python 3.10 (checked 2026-11-09 with pip download --only-binary).
+fastapi==0.162.2
+uvicorn==0.54.0
+pydantic==2.14.3

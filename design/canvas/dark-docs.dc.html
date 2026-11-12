@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Docs & Checklists · Dark dashboard</title>
+<script src="./support.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+*{box-sizing:border-box}
+p,h1,h2,h3{margin:0}
+.app{width:390px;min-height:100vh;display:flex;flex-direction:column;font-family:Inter,system-ui,sans-serif}
+.scroll{flex:1;display:flex;flex-direction:column}
+.top{display:flex;justify-content:space-between;align-items:flex-end}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.btnrow{display:flex;gap:8px;margin-top:14px}
+.btn{font:inherit;font-weight:600;font-size:15px;min-height:44px;padding:0 16px;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;text-decoration:none}
+.btn.grow{flex:1}
+.iconbtn{width:44px;height:44px;padding:0}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.bar{height:6px;border-radius:99px;overflow:hidden}
+.bar>span{display:block;height:100%;border-radius:99px}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;gap:12px;align-items:center;padding:12px 0}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+.tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:8px 8px 14px}
+.tabs a{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;font-weight:500;text-decoration:none;min-height:48px;justify-content:center;border-radius:12px}
+.seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px}
+.seg button{font:inherit;font-size:14px;font-weight:600;min-height:40px;border:0;cursor:pointer}
+.choice{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.choice button{font:inherit;font-size:13px;font-weight:600;min-height:44px;cursor:pointer}
+.thumbs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.thumb{height:96px;display:flex;align-items:flex-end;padding:8px;font-size:12px;font-weight:600}
+.compose{display:flex;gap:8px;align-items:center}
+.compose input{flex:1;font:inherit;font-size:15px;min-height:44px;padding:0 14px}
+.shot{height:150px;display:flex;align-items:center;justify-content:center;font-size:13px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+.app{background:#0B0E14;color:#E6EAF2}
+.scroll{padding:22px 16px 16px;gap:12px}
+h1{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:600;letter-spacing:-.01em}
+h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#9AA4B5;margin:8px 2px 0}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4CC2FF;margin-bottom:2px}
+.card,.tile{background:#141922;border:1px solid #232B38;border-radius:16px;padding:16px}
+.grid2{gap:12px}
+.tile{padding:14px}
+.label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#9AA4B5}
+.big{font-family:'Space Grotesk',sans-serif;font-size:30px;font-weight:600;margin-top:4px}
+.val{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;margin-top:6px}
+.sub,.muted{font-size:13px;color:#9AA4B5;margin-top:2px}
+.mono{font-family:'JetBrains Mono',monospace;font-weight:500}
+.chip{font-size:12px;font-weight:600;padding:5px 10px;border-radius:99px;background:#1C2330;color:#C9D2E0;white-space:nowrap}
+.chip.ok{background:#12291F;color:#5FE3AA}
+.chip.warn{background:#2E2412;color:#FFC56B}
+.chip.info{background:#0F2433;color:#7FD3FF}
+.btn{background:#1C2330;border:1px solid #2A3342;color:#E6EAF2;border-radius:12px}
+.btn.primary{background:#4CC2FF;border-color:#4CC2FF;color:#04121C}
+.btn.danger{color:#FF8A8A}
+.bar{background:#232B38}.bar>span{background:#4CC2FF}.bar>span.hot{background:#FFB547}
+.list li+li{border-top:1px solid #1E2531}
+.dot.work{background:#4CC2FF;box-shadow:0 0 0 4px rgba(76,194,255,.15)}.dot.wait{background:#FFB547}.dot.idle{background:#5B6476}.dot.limit{background:#FF6B6B}.dot.off{background:#5B6476}.dot.on{background:#3DDC97}
+.tabs{background:#0F131B;border-top:1px solid #1E2531}
+.tabs a{color:#8C96A8}.tabs a[aria-current=page]{color:#4CC2FF;background:#13202C}
+.link{display:flex;justify-content:space-between;align-items:center;text-decoration:none;color:inherit}
+.count{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#FFC56B}
+.tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#7FD3FF}
+.seg{background:#141922;border:1px solid #232B38;border-radius:12px}.seg button{background:transparent;color:#9AA4B5;border-radius:9px}.seg button[aria-pressed=true]{background:#1F2937;color:#E6EAF2}
+.choice button{background:#1C2330;border:1px solid #2A3342;color:#C9D2E0;border-radius:10px}
+.choice button[aria-pressed=true].pass{background:#12291F;border-color:#3DDC97;color:#5FE3AA}
+.choice button[aria-pressed=true].fail{background:#2E1616;border-color:#FF6B6B;color:#FF9C9C}
+.thumb{border-radius:12px;border:1px solid #2A3342}
+.thumb.a{background:#0B0E14;color:#7FD3FF}.thumb.b{background:#F7F7F5;color:#1A1A1A}
+.compose input{background:#141922;border:1px solid #2A3342;border-radius:12px;color:#E6EAF2}
+.compose input::placeholder{color:#8C96A8}
+.shot{background:#0F131B;border:1px dashed #2A3342;border-radius:12px;color:#8C96A8;margin-top:12px}
+.note{background:#1C2330;border-radius:10px;padding:10px 12px;font-size:13px;color:#C9D2E0;margin-top:10px}
+.ok{color:#5FE3AA}.warnt{color:#FFC56B}
+.check{padding:14px 0}.check+.check{border-top:1px solid #1E2531}
+.home-bg{background:#151A26}
+</style>
+</helmet>
+<div class="app"><main class="scroll"><header class="top"><div><p class="eyebrow">Mission Control</p><h1>Docs</h1></div><span class="chip ok">On the Pi</span></header>
+<div class="seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Checklists</button><button type="button" aria-pressed="false">Docs</button></div>
+<section class="card" aria-label="Checklist">
+  <p class="label">Slime Keepers phone test · test place v30</p>
+  <div class="row" style="margin-top:8px"><p class="val">12 of 20 done</p><span class="chip warn">2 failed</span></div>
+  <div class="bar" style="margin:12px 0 4px"><span style="width:60%"></span></div>
+  <div class="check"><div class="row"><p><span class="mono muted">13</span>&nbsp; Tutorial egg hatches on first join</p></div>
+<div class="choice" style="margin-top:10px"><button class="pass" type="button" aria-pressed="true">Pass</button><button class="fail" type="button" aria-pressed="false">Fail</button><button type="button" aria-pressed="false">Skip</button></div></div>
+  <div class="check"><div class="row"><p><span class="mono muted">14</span>&nbsp; Shop opens on a small phone</p></div>
+<div class="choice" style="margin-top:10px"><button class="pass" type="button" aria-pressed="false">Pass</button><button class="fail" type="button" aria-pressed="true">Fail</button><button type="button" aria-pressed="false">Skip</button></div><p class="note">Buy buttons cut off at the bottom on a small phone.</p><div class="btnrow" style="margin-top:10px"><button class="btn" type="button"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>1 screenshot</button><button class="btn" type="button">2 comments</button></div></div>
+  <div class="check"><div class="row"><p><span class="mono muted">15</span>&nbsp; Goo Pass panel scrolls smoothly</p></div>
+<div class="choice" style="margin-top:10px"><button class="pass" type="button" aria-pressed="false">Pass</button><button class="fail" type="button" aria-pressed="false">Fail</button><button type="button" aria-pressed="false">Skip</button></div></div>
+  <div class="check"><div class="row"><p><span class="mono muted">16</span>&nbsp; Teleport Hub → Beach keeps your slimes</p></div>
+<div class="choice" style="margin-top:10px"><button class="pass" type="button" aria-pressed="false">Pass</button><button class="fail" type="button" aria-pressed="false">Fail</button><button type="button" aria-pressed="false">Skip</button></div></div>
+</section>
+<h2>Docs</h2>
+<ul class="list">
+  <li><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"/></svg><div style="flex:1"><p>Mission Control PLAN.md</p><p class="muted">Edited by Claude · 2 h ago</p></div></li>
+  <li><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"/></svg><div style="flex:1"><p>Feel and retention pass</p><p class="muted">3 open comments</p></div></li>
+</ul>
+</main><nav class="tabs" aria-label="Main tabs"><a href="Main.dc.html"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a><a href="dark-claude.dc.html"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg><span>Claude</span></a><a href="dark-docs.dc.html" aria-current="page"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"/></svg><span>Docs</span></a><a href="dark-system.dc.html"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><span>System</span></a></nav></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+{
+ "v": 3,
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-11-09T08:15:00Z"
+ },
+ "title": "Mission Control mockups",
+ "launch": {
+  "view": "canvas"
+ },
+ "pages": [],
+ "boards": {
+  "Main.dc.html": {
+   "x": 0,
+   "y": 0,
+   "w": 390,
+   "h": 1000,
+   "title": "Dark dashboard \u00b7 Home",
+   "is_interactive": true
+  },
+  "dark-claude.dc.html": {
+   "x": 470,
+   "y": 0,
+   "w": 390,
+   "h": 1480,
+   "title": "Dark dashboard \u00b7 Claude",
+   "is_interactive": true
+  },
+  "dark-docs.dc.html": {
+   "x": 940,
+   "y": 0,
+   "w": 390,
+   "h": 1300,
+   "title": "Dark dashboard \u00b7 Docs & Checklists",
+   "is_interactive": true
+  },
+  "dark-system.dc.html": {
+   "x": 1410,
+   "y": 0,
+   "w": 390,
+   "h": 1200,
+   "title": "Dark dashboard \u00b7 System",
+   "is_interactive": true
+  },
+  "dark-widget.dc.html": {
+   "x": 1880,
+   "y": 0,
+   "w": 390,
+   "h": 844,
+   "title": "Dark dashboard \u00b7 Widget",
+   "is_interactive": false
+  },
+  "clean-home.dc.html": {
+   "x": 0,
+   "y": 1900,
+   "w": 390,
+   "h": 1000,
+   "title": "Clean minimal \u00b7 Home",
+   "is_interactive": true
+  },
+  "clean-claude.dc.html": {
+   "x": 470,
+   "y": 1900,
+   "w": 390,
+   "h": 1480,
+   "title": "Clean minimal \u00b7 Claude",
+   "is_interactive": true
+  },
+  "clean-docs.dc.html": {
+   "x": 940,
+   "y": 1900,
+   "w": 390,
+   "h": 1300,
+   "title": "Clean minimal \u00b7 Docs & Checklists",
+   "is_interactive": true
+  },
+  "clean-system.dc.html": {
+   "x": 1410,
+   "y": 1900,
+   "w": 390,
+   "h": 1200,
+   "title": "Clean minimal \u00b7 System",
+   "is_interactive": true
+  },
+  "clean-widget.dc.html": {
+   "x": 1880,
+   "y": 1900,
+   "w": 390,
+   "h": 844,
+   "title": "Clean minimal \u00b7 Widget",
+   "is_interactive": false
+  }
+ },
+ "order": [
+  "Main.dc.html",
+  "dark-claude.dc.html",
+  "dark-docs.dc.html",
+  "dark-system.dc.html",
+  "dark-widget.dc.html",
+  "clean-home.dc.html",
+  "clean-claude.dc.html",
+  "clean-docs.dc.html",
+  "clean-system.dc.html",
+  "clean-widget.dc.html"
+ ],
+ "notes": {
+  "t-dark": {
+   "x": 0,
+   "y": -300,
+   "text": "A \u00b7 Dark dashboard",
+   "kind": "title1",
+   "maxW": 2270
+  },
+  "t-clean": {
+   "x": 0,
+   "y": 1600,
+   "text": "B \u00b7 Clean minimal",
+   "kind": "title1",
+   "maxW": 2270
+  },
+  "n-sample": {
+   "x": 2430,
+   "y": 0,
+   "text": "Sample data. Session names and usage are real from 9 Nov 08:00; temps, counts and Roblox numbers are placeholders. No IPs, MACs or email anywhere. Tabs at the bottom link the screens: press Play to click through.",
+   "w": 300,
+   "fill": "gray"
+  }
+ },
+ "designSystems": []
+}

@@ -1,0 +1,21 @@
+# secrets and machine-specific config never go to GitHub
+*.keystore
+*.pass
+*.env
+!*.env.example
+agent.json
+mc-pc.json
+mc.local.properties
+secrets/
+state/
+.venv/
+local.properties
+# build output
+build/
+.gradle/
+*.apk
+*.idsig
+__pycache__/
+mc-pc.log
+build-cli/
+dist/

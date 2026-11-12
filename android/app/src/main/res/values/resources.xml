@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Mission Control</string>
+    <string name="widget_description">PC wake/sleep, Claude status, approvals and checklist progress</string>
+    <color name="mc_bg">#0B0E14</color>
+    <style name="Theme.MissionControl" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mc_bg</item>
+    </style>
+</resources>

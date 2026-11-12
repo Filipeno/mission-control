@@ -1,0 +1,107 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#05070B;font-family:Inter,"Segoe UI",system-ui,sans-serif;color:#E6EAF2}
+.wall{display:flex;gap:28px;padding:28px;align-items:flex-start}
+.cap{font-size:13px;color:#9AA4B5;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin:0 0 10px 4px}
+.phone{width:390px;height:844px;background:#0B0E14;border:1px solid #232B38;border-radius:28px;overflow:hidden;display:flex;flex-direction:column;position:relative}
+.scroll{flex:1;padding:22px 16px 12px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.12em;color:#4CC2FF}
+h1{font-family:"Space Grotesk","Segoe UI",sans-serif;font-size:28px;font-weight:600;margin:0}
+h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#9AA4B5;margin:8px 2px 0}
+.top{display:flex;justify-content:space-between;align-items:flex-end}
+.chip{font-size:13px;font-weight:600;border-radius:99px;padding:5px 11px;white-space:nowrap}
+.c-blue{background:#0F2A3B;color:#4CC2FF}.c-amber{background:#3A2A0C;color:#FFB547}.c-grey{background:#1C2230;color:#9AA4B5}.c-red{background:#3A1418;color:#FF6B6B}
+.card{background:#141922;border:1px solid #232B38;border-radius:16px;padding:14px}
+.card.need{border-color:#5A4115}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+.sess{display:flex;gap:12px;align-items:flex-start;padding:12px 2px;border-bottom:1px solid #1C2230}
+.sess .t{font-size:16px;font-weight:600}.sess .s{font-size:13px;color:#9AA4B5;margin-top:3px}
+.mono{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px}
+.label{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#4CC2FF}
+.label.amber{color:#FFB547}
+.btn{font:inherit;font-weight:600;font-size:15px;min-height:44px;border-radius:12px;border:1px solid #2A3342;background:#1C2230;color:#E6EAF2;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 14px}
+.btn.pri{background:#4CC2FF;color:#05121C;border-color:#4CC2FF}.btn.red{color:#FF6B6B}
+.btns{display:flex;gap:8px;margin-top:12px}.btns .btn{flex:1}
+.opt{border:1px solid #2A3342;border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px}
+.opt b{display:block;font-size:15px}.opt span{color:#9AA4B5;font-size:13px}
+.opt.sel{border-color:#4CC2FF;background:#0F2A3B}
+.msg{max-width:86%;padding:10px 12px;border-radius:14px;font-size:14px;line-height:1.4}
+.me{align-self:flex-end;background:#16384D}.ai{align-self:flex-start;background:#141922;border:1px solid #232B38}
+.tool{align-self:flex-start;font-size:12.5px;color:#9AA4B5;padding:6px 10px;border:1px dashed #2A3342;border-radius:10px}
+.compose{display:flex;gap:8px;padding:10px 16px 14px;border-top:1px solid #1C2230;background:#0B0E14}
+.compose .in{flex:1;border:1px solid #2A3342;border-radius:12px;padding:12px 14px;color:#6B7588;font-size:15px}
+.code{background:#0B0E14;border:1px solid #232B38;border-radius:10px;padding:10px;margin-top:8px;white-space:pre-wrap;line-height:1.45}
+.add{color:#4ADE80}.del{color:#FF6B6B}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);padding:8px 8px 14px;border-top:1px solid #1C2230;font-size:12px;color:#9AA4B5;text-align:center}
+.tabs .on{color:#4CC2FF;background:#141E2A;border-radius:12px;padding:8px 0}.tabs div{padding:8px 0}
+.back{color:#4CC2FF;font-size:14px;font-weight:600}
+.small{font-size:12.5px;color:#9AA4B5}
+.fp{width:18px;height:18px}
+</style></head><body><div class="wall">
+
+<!-- 1 session list -->
+<div><p class="cap">1 · Session list</p><div class="phone"><div class="scroll">
+ <div class="eyebrow">MISSION CONTROL</div>
+ <div class="top"><h1>Claude</h1><span class="chip c-blue">2 working · 1 needs you</span></div>
+ <h2>Sessions</h2>
+ <div class="sess"><span class="dot" style="background:#FFB547;margin-top:6px"></span><div style="flex:1"><div class="row"><span class="t">garden-sensor-api</span><span class="chip c-amber">Asks you</span></div><div class="s">Which database should the API use?</div><div class="small mono" style="margin-top:2px">D:\projekty\garden · 2 min ago</div></div></div>
+ <div class="sess"><span class="dot" style="background:#4CC2FF;margin-top:6px"></span><div style="flex:1"><div class="row"><span class="t">weather-widget</span><span class="chip c-blue">Working</span></div><div class="s">Bash: gradlew assembleDebug</div><div class="small mono" style="margin-top:2px">D:\projekty\weather · now</div></div></div>
+ <div class="sess"><span class="dot" style="background:#4CC2FF;margin-top:6px"></span><div style="flex:1"><div class="row"><span class="t">blog-redesign</span><span class="chip c-blue">Working</span></div><div class="s">Edit: src/styles/theme.css</div><div class="small mono" style="margin-top:2px">D:\projekty\blog · 10 s ago</div></div></div>
+ <div class="sess"><span class="dot" style="background:#5B6475;margin-top:6px"></span><div style="flex:1"><div class="row"><span class="t">photo-sorter</span><span class="chip c-grey">Idle</span></div><div class="s">Done: 214 photos sorted into 12 folders.</div><div class="small mono" style="margin-top:2px">D:\projekty\photos · 1 h ago</div></div></div>
+ <h2>Approvals · 1</h2>
+ <div class="card"><div class="label">Commit</div><div style="font-size:16px;font-weight:600;margin-top:4px">Commit sensor schema</div><div class="small">garden-sensor-api · 3 files</div></div>
+ <div class="small" style="margin-top:4px">Usage, hub status and ideas stay below, as now.</div>
+</div><div class="tabs"><div>Home</div><div class="on">Claude</div><div>Docs</div><div>System</div></div></div></div>
+
+<!-- 2 session view + question -->
+<div><p class="cap">2 · Session view + question</p><div class="phone"><div class="scroll">
+ <div class="row"><span class="back">‹ Sessions</span><span class="chip c-amber">Asks you</span></div>
+ <div style="font-size:20px;font-weight:600">garden-sensor-api</div>
+ <div class="msg me">Add an API that stores soil readings.</div>
+ <div class="tool">▸ Read: README.md · Glob: src/**/*.py (14 files)</div>
+ <div class="msg ai">The API part is ready. Before I add storage I need one decision.</div>
+ <div class="card need"><div class="label amber">Question · Database</div>
+  <div style="font-size:16px;font-weight:600;margin-top:4px">Which database should the API use?</div>
+  <div class="opt sel"><b>SQLite (Recommended)</b><span>One file, nothing to install.</span></div>
+  <div class="opt"><b>PostgreSQL</b><span>Separate server, more setup.</span></div>
+  <div class="opt"><b>Other…</b><span>Type your own answer.</span></div>
+  <div class="btns"><div class="btn pri"><svg class="fp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 11v3M8.5 8.5a5 5 0 0 1 8.5 3.5v2M7 12v1a8 8 0 0 0 1 4M12 7a5 5 0 0 0-5 5M16.5 17a10 10 0 0 0 .5-3"/></svg>Send answer</div></div>
+ </div>
+</div><div class="compose"><div class="in">Message garden-sensor-api…</div><div class="btn pri" style="width:48px;padding:0">➤</div></div>
+<div style="text-align:center;padding:0 0 12px;font-size:13px;color:#4CC2FF;font-weight:600">Open in Claude app ↗</div></div></div>
+
+<!-- 3 permission -->
+<div><p class="cap">3 · Permission request</p><div class="phone"><div class="scroll">
+ <div class="row"><span class="back">‹ Sessions</span><span class="chip c-amber">Needs permission</span></div>
+ <div style="font-size:20px;font-weight:600">weather-widget</div>
+ <div class="tool">▸ Bash: gradlew assembleDebug ✓ · 3 more steps</div>
+ <div class="msg ai">Build works. I want to install it on the test phone.</div>
+ <div class="card need"><div class="label amber">Wants to run · Bash</div>
+  <div class="code mono">adb install -r app\build\outputs\apk\debug\app-debug.apk</div>
+  <div class="small" style="margin-top:8px">Folder: D:\projekty\weather</div>
+  <div class="label amber" style="margin-top:14px">Also asks · Edit</div>
+  <div class="code mono">app/build.gradle.kts
+<span class="del">-  versionName = "1.2.0"</span>
+<span class="add">+  versionName = "1.2.1"</span></div>
+  <div class="btns"><div class="btn pri"><svg class="fp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 11v3M8.5 8.5a5 5 0 0 1 8.5 3.5v2M7 12v1a8 8 0 0 0 1 4M12 7a5 5 0 0 0-5 5M16.5 17a10 10 0 0 0 .5-3"/></svg>Allow</div><div class="btn red">Deny</div><div class="btn">Deny + note</div></div>
+  <div class="small" style="margin-top:10px">Shown exactly as it will run. Auto-approve: off (Settings).</div>
+ </div>
+</div><div class="compose"><div class="in">Message weather-widget…</div><div class="btn pri" style="width:48px;padding:0">➤</div></div><div style="height:12px"></div></div></div>
+
+<!-- 4 new session -->
+<div><p class="cap">4 · New session proposal</p><div class="phone"><div class="scroll">
+ <div class="row"><span class="back">‹ Sessions</span><span class="chip c-amber">Proposes a session</span></div>
+ <div style="font-size:20px;font-weight:600">blog-redesign</div>
+ <div class="msg ai">The theme is done. The image pipeline is a separate job, so I propose a new session for it.</div>
+ <div class="card need"><div class="label amber">New session</div>
+  <div style="font-size:16px;font-weight:600;margin-top:4px">Compress blog images to WebP</div>
+  <div class="small mono" style="margin-top:4px">Folder: D:\projekty\blog · fresh · Sonnet, medium</div>
+  <div class="code" style="font-size:13.5px">Convert every PNG/JPG under public/img to WebP (quality 82), keep the originals in public/img/orig, update the &lt;img&gt; tags, and report the size saved. Done when the site builds and all pages show images.</div>
+  <div class="btns"><div class="btn pri"><svg class="fp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 11v3M8.5 8.5a5 5 0 0 1 8.5 3.5v2M7 12v1a8 8 0 0 0 1 4M12 7a5 5 0 0 0-5 5M16.5 17a10 10 0 0 0 .5-3"/></svg>Start</div><div class="btn">Dismiss</div></div>
+  <div class="small" style="margin-top:10px">Start is sent to the session as your words (route you pick).</div>
+ </div>
+</div><div class="compose"><div class="in">Message blog-redesign…</div><div class="btn pri" style="width:48px;padding:0">➤</div></div><div style="height:12px"></div></div></div>
+
+</div></body></html>

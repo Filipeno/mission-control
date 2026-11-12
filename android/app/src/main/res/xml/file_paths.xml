@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Camera pictures for checklist screenshots and the downloaded update APK: temporary files in the app's cache. -->
+<paths><cache-path name="shots" path="." /></paths>

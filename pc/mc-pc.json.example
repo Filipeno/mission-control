@@ -1,0 +1,4 @@
+{
+  "url": "http://<pi-address>:8780",
+  "token": "<output of: ssh pi ~/mission-control/.venv/bin/python ~/mission-control/mcpi.py pc-token>"
+}

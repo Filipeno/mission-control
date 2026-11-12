@@ -1,0 +1,29 @@
+[Unit]
+Description=mission-control (mc-pi): API for the Mission Control phone app
+After=network-online.target pc-waker.service
+Wants=network-online.target
+
+[Service]
+User=filip
+WorkingDirectory=/home/filip/mission-control
+ExecStart=/home/filip/mission-control/.venv/bin/python /home/filip/mission-control/mcpi.py serve
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+StateDirectory=mission-control
+StateDirectoryMode=0700
+
+# Hardening, like pc-waker. Reads pc-waker.env (read-only home), runs systemctl is-active.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

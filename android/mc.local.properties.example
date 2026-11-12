@@ -1,0 +1,4 @@
+# Copy to mc.local.properties (git-ignored). Default mc-pi address shown on the login screen.
+mc.piUrl=http://<pi-address>:8780
+# Public tunnel address; only /api/events is routed there.
+mc.remoteUrl=https://<mc tunnel hostname>
