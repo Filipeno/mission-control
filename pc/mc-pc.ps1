@@ -181,11 +181,22 @@ function Get-Usage {
 # ------------------------------------------------------------------ live stats + screenshot (stage 6)
 
 function Get-LhmCpuTemp {
-    # LibreHardwareMonitor (running as admin at logon) publishes sensors in WMI. Read-only, local.
+    # LibreHardwareMonitor (admin, started at logon by a scheduled task) serves its sensors as JSON on
+    # localhost:8085 (this version has no WMI provider). Read-only, local only.
     try {
-        $s = Get-CimInstance -Namespace root\LibreHardwareMonitor -ClassName Sensor -ErrorAction Stop |
-            Where-Object { $_.SensorType -eq 'Temperature' -and $_.Name -match 'CPU Package|Tctl|Tdie|Core \(Tctl' } | Select-Object -First 1
-        if ($s) { return [double]$s.Value }
+        $j = (Invoke-WebRequest 'http://127.0.0.1:8085/data.json' -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
+        $found = $null
+        function Find-Cpu($n) {
+            foreach ($c in $n.Children) {
+                if ($c.SensorId -match '^/(amdcpu|intelcpu)/\d+/temperature/' -and $c.Text -match 'Package|Tctl|Tdie' -and -not $script:found) {
+                    $script:found = $c.Value
+                }
+                Find-Cpu $c
+            }
+        }
+        $script:found = $null
+        Find-Cpu $j
+        if ($script:found -match '([\d]+[.,]?[\d]*)') { return [double]($Matches[1] -replace ',', '.') }
     } catch { }
     $null
 }

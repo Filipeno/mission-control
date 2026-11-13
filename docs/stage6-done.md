@@ -14,7 +14,7 @@ App 0.7.0 (`dist/mission-control-0.7.0.apk`, git-ignored). Plan: `stage6-plan.md
 - Emulator: System tab renders; widget added at both sizes; widget Sleep opens the app's "Put the PC to sleep?" dialog (cancelled, PC not slept).
 
 ## Not verified / still open
-- **CPU temperature**: the LibreHardwareMonitor installer (PawnIO driver) needs a UAC click that was not given; shows "CPU —" until installed.
+- **CPU temperature**: done 2026-11-13 (LibreHardwareMonitor via logon task, mc-pc reads its localhost:8085 JSON).
 - **Mini PC temp/disk/uptime**: needs the HA token (steps below); until then "Home Assistant answers".
 - **Earnings + daily players**: need the Roblox key; the Open Cloud Analytics API is beta and the metric names (`DailyActiveUsers`, `DailyRevenue`) and response format are from docs only, never called with a key.
 - Widget **Wake** (needs the PC asleep), widget on the phone's own launcher, 30-minute refresh, "as of" stale display.
