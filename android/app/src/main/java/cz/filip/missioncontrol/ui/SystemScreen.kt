@@ -111,11 +111,13 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     LaunchedEffect(waitingShot) { if (waitingShot) { delay(40_000); waitingShot = false } }
 
     fun requestShot() {
+        if (waitingShot) return
+        waitingShot = true      // "Taking…" at once; undone below if the Pi refuses
         scope.launch {
             try {
                 withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/screenshot") }
-                waitingShot = true
             } catch (e: ApiError) {
+                waitingShot = false
                 Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
             }
         }

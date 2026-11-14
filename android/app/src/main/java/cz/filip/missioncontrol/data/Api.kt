@@ -10,7 +10,7 @@ class ApiError(val code: Int, message: String) : Exception(message)
 
 /** Blocking calls to mc-pi. Call from Dispatchers.IO or a background thread. */
 object Api {
-    fun call(c: Context, method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 8000): JSONObject {
+    fun call(c: Context, method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 8000, token: String? = Store.token(c)): JSONObject {
         val base = Store.baseUrl(c)
         if (base.isBlank()) throw ApiError(0, "No Pi address set")
         val conn = try {
@@ -22,7 +22,7 @@ object Api {
             conn.requestMethod = method
             conn.connectTimeout = 4000
             conn.readTimeout = timeoutMs
-            Store.token(c)?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+            token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
             if (body != null) {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")

@@ -57,13 +57,31 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
         }
     }
 
+    var saving by remember { mutableStateOf(0) }
+    var testing by remember { mutableStateOf(false) }
+
+    /** Shows the new value at once; the Pi's answer replaces it when it arrives, and a failure reloads the old one. */
     fun save(change: JSONObject) {
-        scope.launch {
-            try {
-                s = withContext(Dispatchers.IO) { Api.post(ctx, "/api/settings", change) }.getJSONObject("settings")
-            } catch (e: ApiError) {
-                Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+        s?.let { cur ->
+            val c = JSONObject(cur.toString())
+            for (k in change.keys()) {
+                val v = change.get(k)
+                if (v is JSONObject && c.optJSONObject(k) != null) { val sub = c.getJSONObject(k); for (kk in v.keys()) sub.put(kk, v.get(kk)) }
+                else c.put(k, v)
             }
+            s = c
+        }
+        saving++
+        scope.launch {
+            var failed = false
+            try {
+                val r = withContext(Dispatchers.IO) { Api.post(ctx, "/api/settings", change) }.getJSONObject("settings")
+                if (saving == 1) s = r
+            } catch (e: ApiError) {
+                failed = true
+                Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+            } finally { saving-- }
+            if (failed) load()
         }
     }
 
@@ -126,7 +144,8 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             Text("Outside home: ${Store.remoteUrl(ctx).ifBlank { "not set" }}", color = Mc.Muted, fontSize = 13.sp)
             val last = Store.lastPushAt(ctx)
             if (last > 0) Text("Last notification: ${clock(last / 1000.0)}", color = Mc.Muted, fontSize = 14.sp)
-            TextButton(onClick = {
+            TextButton(enabled = !testing, onClick = {
+                testing = true
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) { Api.post(ctx, "/api/push/test") }
@@ -134,6 +153,7 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                     } catch (e: ApiError) {
                         Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
                     }
+                    testing = false
                     tick++
                 }
             }) { Text("Send test notification", color = Mc.Accent) }
@@ -162,11 +182,12 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             Label("Account")
             Text("Pi: ${Store.baseUrl(ctx)}", color = Mc.Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
             TextButton(onClick = {
-                scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { Api.post(ctx, "/api/logout") } }
-                    Store.setToken(ctx, null)
-                    onLoggedOut()
-                }
+                // Leave at once; the Pi is told in the background with the token we still hold.
+                val token = Store.token(ctx)
+                val app = ctx.applicationContext
+                kotlin.concurrent.thread { runCatching { Api.call(app, "POST", "/api/logout", JSONObject(), token = token) } }
+                Store.setToken(ctx, null)
+                onLoggedOut()
             }) { Text("Log out", color = Mc.Bad) }
         }
     }

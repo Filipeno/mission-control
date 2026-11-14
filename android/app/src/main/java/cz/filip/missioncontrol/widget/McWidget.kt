@@ -59,21 +59,29 @@ private val cGood = ColorProvider(Color(0xFF4ADE9A))
 private val cOnAccent = ColorProvider(Color(0xFF04121C))
 
 /** What the widget shows; cached on the phone so it still has numbers when the Pi is out of reach. */
-data class WidgetState(val json: JSONObject?, val fetchedAt: Long, val fresh: Boolean, val loggedIn: Boolean)
+data class WidgetState(val json: JSONObject?, val fetchedAt: Long, val fresh: Boolean, val loggedIn: Boolean, val waking: Boolean = false)
 
 object WidgetData {
     private fun sp(c: Context) = c.getSharedPreferences("widget", Context.MODE_PRIVATE)
 
+    /** A tap on Wake shows "Waking…" at once; this remembers it until the PC is up, the call failed, or 90 s passed. */
+    fun setWaking(c: Context, on: Boolean) = sp(c).edit().putLong("waking_at", if (on) System.currentTimeMillis() else 0L).apply()
+    private fun waking(c: Context) = System.currentTimeMillis() - sp(c).getLong("waking_at", 0L) < 90_000
+
     suspend fun load(c: Context): WidgetState {
         if (Store.token(c) == null) return WidgetState(null, 0, false, false)
-        val got = withContext(Dispatchers.IO) { runCatching { Api.get(c, "/api/widget") }.getOrNull() }
+        // Right after a Wake tap draw from the cache without waiting for the Pi.
+        val instant = System.currentTimeMillis() - sp(c).getLong("waking_at", 0L) < 1_500
+        val got = if (instant) null else withContext(Dispatchers.IO) { runCatching { Api.get(c, "/api/widget") }.getOrNull() }
         if (got != null) {
             val now = System.currentTimeMillis()
             sp(c).edit().putString("json", got.toString()).putLong("at", now).apply()
-            return WidgetState(got, now, true, true)
+            val online = got.optJSONObject("pc")?.optBoolean("online") == true
+            if (online) setWaking(c, false)
+            return WidgetState(got, now, true, true, waking(c) && !online)
         }
         val cached = sp(c).getString("json", null)?.let { runCatching { JSONObject(it) }.getOrNull() }
-        return WidgetState(cached, sp(c).getLong("at", 0), false, true)
+        return WidgetState(cached, sp(c).getLong("at", 0), instant, true, waking(c))
     }
 }
 
@@ -139,7 +147,7 @@ class McWidget : GlanceAppWidget() {
                 Column(GlanceModifier.defaultWeight().clickable(open(c, 0))) {
                     Text("PC", style = TextStyle(color = cMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold))
                     Text(
-                        if (online) "Awake" else "Asleep",
+                        if (online) "Awake" else if (st.waking) "Waking…" else "Asleep",
                         style = TextStyle(color = cText, fontSize = if (large) 24.sp else 20.sp, fontWeight = FontWeight.Bold),
                     )
                 }
@@ -202,7 +210,11 @@ class McWidget : GlanceAppWidget() {
 
 class WakeAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        withContext(Dispatchers.IO) { runCatching { Api.post(context, "/api/pc/wake") } }
+        // Show "Waking…" now, send in the background of this callback, and undo it if the Pi says no.
+        WidgetData.setWaking(context, true)
+        McWidget().updateAll(context)
+        val ok = withContext(Dispatchers.IO) { runCatching { Api.post(context, "/api/pc/wake") }.isSuccess }
+        if (!ok) WidgetData.setWaking(context, false)
         delay(1500)
         McWidget().updateAll(context)
     }

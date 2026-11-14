@@ -95,14 +95,18 @@ class ActionReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, intent: Intent) {
         val done = goAsync()
         val app = c.applicationContext
+        // The button reacts at once: the notification goes away, the call runs behind it.
+        app.getSystemService(NotificationManager::class.java).cancel(intent.getIntExtra("notif", 0))
         thread {
             try {
                 Api.post(app, "/api/action", JSONObject()
                     .put("post", intent.getStringExtra("post"))
                     .put("body", JSONObject(intent.getStringExtra("body") ?: "{}")))
-                app.getSystemService(NotificationManager::class.java).cancel(intent.getIntExtra("notif", 0))
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "action failed: ${e.message}")
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(app, "Action failed: ${e.message ?: "no answer"}", android.widget.Toast.LENGTH_LONG).show()
+                }
             } finally {
                 done.finish()
             }

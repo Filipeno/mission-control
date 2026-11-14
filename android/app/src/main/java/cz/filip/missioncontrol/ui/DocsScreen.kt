@@ -74,6 +74,7 @@ import cz.filip.missioncontrol.data.ApiError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -81,6 +82,21 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 private fun JSONArray?.objs(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
+
+private fun itemOf(doc: JSONObject, id: Int): JSONObject {
+    val items = doc.optJSONObject("items") ?: JSONObject().also { doc.put("items", it) }
+    return items.optJSONObject(id.toString()) ?: JSONObject().also { items.put(id.toString(), it) }
+}
+
+private fun addComment(doc: JSONObject, c: JSONObject) {
+    val arr = doc.optJSONArray("comments") ?: JSONArray().also { doc.put("comments", it) }
+    arr.put(c.put("id", "local-${System.nanoTime()}").put("resolved", false))
+}
+
+private fun resolveComment(doc: JSONObject, id: String) {
+    val arr = doc.optJSONArray("comments") ?: return
+    for (i in 0 until arr.length()) arr.optJSONObject(i)?.takeIf { it.optString("id") == id }?.put("resolved", true)
+}
 
 /** Markdown marks that would show raw: **bold**, `code`. */
 private fun plain(s: String) = s.replace("**", "").replace("`", "")
@@ -180,12 +196,21 @@ private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
     LaunchedEffect(tick) {
         try { d = withContext(Dispatchers.IO) { Api.get(ctx, "/api/docs/$slug") }; error = null } catch (e: ApiError) { error = e.message }
     }
-    fun post(path: String, body: JSONObject = JSONObject(), ok: String? = null) = scope.launch {
-        try {
-            withContext(Dispatchers.IO) { Api.post(ctx, "/api/docs/$slug$path", body) }
-            ok?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
-            tick++
-        } catch (e: ApiError) { Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show() }
+    val lock = remember { kotlinx.coroutines.sync.Mutex() }     // calls go to the Pi in tap order
+    var pending by remember { mutableIntStateOf(0) }
+    /** Edits the doc on screen at once ([patch] runs on a copy), then tells the Pi; the real doc is re-read when the queue is empty or a call failed. */
+    fun post(path: String, body: JSONObject = JSONObject(), ok: String? = null, patch: ((JSONObject) -> Unit)? = null): kotlinx.coroutines.Job {
+        ok?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+        if (patch != null) d?.let { cur -> d = JSONObject(cur.toString()).also(patch) }
+        pending++
+        return scope.launch {
+            var failed = false
+            try {
+                lock.withLock { withContext(Dispatchers.IO) { Api.post(ctx, "/api/docs/$slug$path", body) } }
+            } catch (e: ApiError) { failed = true; Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show() }
+            finally { pending-- }
+            if (failed || pending == 0) tick++
+        }
     }
 
     Column(modifier.fillMaxSize().imePadding()) {
@@ -214,7 +239,7 @@ private fun shrinkJpeg(ctx: Context, uri: Uri): ByteArray {
 }
 
 @Composable
-private fun Checklist(slug: String, doc: JSONObject, post: (String, JSONObject, String?) -> Any, refresh: () -> Unit) {
+private fun Checklist(slug: String, doc: JSONObject, post: (String, JSONObject, String?, ((JSONObject) -> Unit)?) -> kotlinx.coroutines.Job, refresh: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val blocks = doc.optJSONArray("blocks").objs()
@@ -230,10 +255,12 @@ private fun Checklist(slug: String, doc: JSONObject, post: (String, JSONObject, 
 
     fun upload(uri: Uri) {
         val id = shotFor ?: return
+        Toast.makeText(ctx, "Adding screenshot…", Toast.LENGTH_SHORT).show()
+        shotFor = null
         scope.launch {
             try {
                 withContext(Dispatchers.IO) { Api.bytes(ctx, "/api/docs/$slug/item/$id/shot", shrinkJpeg(ctx, uri), "image/jpeg") }
-                Toast.makeText(ctx, "Screenshot added", Toast.LENGTH_SHORT).show(); refresh()
+                refresh()
             } catch (e: Exception) { Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show() }
         }
     }
@@ -260,14 +287,21 @@ private fun Checklist(slug: String, doc: JSONObject, post: (String, JSONObject, 
                     val id = b.optInt("id")
                     val it = items.optJSONObject(id.toString()) ?: JSONObject()
                     ItemRow(id, plain(b.optString("text")), it, comments.count { c -> c.optInt("item", -1) == id },
-                        setStatus = { s -> post("/item/$id", JSONObject().put("status", if (s == it.optString("status")) "" else s), null) },
-                        saveNote = { n -> post("/item/$id", JSONObject().put("note", n), null) },
+                        setStatus = { s ->
+                            val next = if (s == it.optString("status")) "" else s
+                            post("/item/$id", JSONObject().put("status", next), null) { dd -> itemOf(dd, id).put("status", next) }
+                        },
+                        saveNote = { n -> post("/item/$id", JSONObject().put("note", n), null) { dd -> itemOf(dd, id).put("note", n) } },
                         onShot = { shotFor = id }, onShots = { viewShots = it.optJSONArray("shots")?.let { a -> (0 until a.length()).map(a::getString) } },
                         onComments = { commentsFor = id })
                 }
             }
         }
-        Button(onClick = { post("/finish", JSONObject(), "Sent to Claude") }, shape = RoundedCornerShape(14.dp),
+        var finishing by remember { mutableStateOf(false) }
+        Button(enabled = !finishing, onClick = {
+            finishing = true
+            post("/finish", JSONObject(), "Sent to Claude", null).invokeOnCompletion { finishing = false }
+        }, shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C)),
             modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp).height(52.dp)) { Text("Finish and send to Claude", fontSize = 16.sp) }
     }
@@ -289,8 +323,8 @@ private fun Checklist(slug: String, doc: JSONObject, post: (String, JSONObject, 
     }
     commentsFor?.let { id ->
         CommentsDialog(comments.filter { it.optInt("item", -1) == id }, onDismiss = { commentsFor = null },
-            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("item", id), null) },
-            onResolve = { c -> post("/comment/$c/resolve", JSONObject(), null) })
+            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("item", id), null) { dd -> addComment(dd, JSONObject().put("text", t).put("item", id)) } },
+            onResolve = { c -> post("/comment/$c/resolve", JSONObject(), null) { dd -> resolveComment(dd, c) } })
     }
 }
 
@@ -372,7 +406,7 @@ private fun CommentsDialog(list: List<JSONObject>, onDismiss: () -> Unit, onAdd:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, String?) -> Any) {
+private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, String?, ((JSONObject) -> Unit)?) -> kotlinx.coroutines.Job) {
     val text = doc.optString("text")
     val lines = text.lines()
     val comments = doc.optJSONArray("comments").objs()
@@ -382,11 +416,11 @@ private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, St
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
         if (editing) {
-            SmallButton("Save") { post("/text", JSONObject().put("text", draft), "Saved"); editing = false }
+            SmallButton("Save") { post("/text", JSONObject().put("text", draft), "Saved") { dd -> dd.put("text", draft) }; editing = false }
             SmallButton("Cancel") { draft = text; editing = false }
         } else {
             SmallButton("Edit") { editing = true }
-            SmallButton("Send to Claude") { post("/send", JSONObject(), "Sent to Claude") }
+            SmallButton("Send to Claude") { post("/send", JSONObject(), "Sent to Claude", null) }
         }
     }
     if (editing) {
@@ -411,7 +445,7 @@ private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, St
     }
     lineFor?.let { i ->
         CommentsDialog(comments.filter { it.optInt("line", -1) == i }, onDismiss = { lineFor = null }, title = "Line ${i + 1}",
-            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("line", i), null) },
-            onResolve = { c -> post("/comment/$c/resolve", JSONObject(), null) })
+            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("line", i), null) { dd -> addComment(dd, JSONObject().put("text", t).put("line", i)) } },
+            onResolve = { c -> post("/comment/$c/resolve", JSONObject(), null) { dd -> resolveComment(dd, c) } })
     }
 }

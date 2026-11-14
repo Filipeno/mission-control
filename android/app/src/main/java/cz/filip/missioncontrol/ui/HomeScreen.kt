@@ -84,32 +84,48 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     var resumed by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    var inflight by remember { mutableStateOf(0) }        // taps whose call to the Pi has not finished
+    val busy = inflight > 0
+    var pcPending by remember { mutableStateOf<String?>(null) }   // "wake" / "sleep" shown at once, until the PC confirms
+    var pcPendingAt by remember { mutableStateOf(0L) }
     var sleepDialog by remember { mutableStateOf(false) }
 
-    suspend fun load() {
+    suspend fun load(force: Boolean = false) {
         try {
-            data = withContext(Dispatchers.IO) { Api.get(ctx, "/api/home") }
+            val d = withContext(Dispatchers.IO) { Api.get(ctx, "/api/home") }
+            // While one of our own taps is in flight the poll must not undo the instant change.
+            if (inflight == 0 || force) {
+                data = d
+                val online = d.optJSONObject("pc")?.optBoolean("online") == true
+                val p = pcPending
+                if (p != null && ((p == "wake" && online) || (p == "sleep" && !online) || System.currentTimeMillis() - pcPendingAt > 90_000)) pcPending = null
+            }
             error = null
         } catch (e: ApiError) {
             if (e.code == 401) onLoggedOut() else error = e.message
         }
     }
 
-    fun act(path: String, body: JSONObject = JSONObject(), ok: String? = null) {
+    /** Changes the screen at once ([patch] edits a copy of the home data), then calls the Pi; on failure reloads the truth and says why. */
+    fun act(path: String, body: JSONObject = JSONObject(), ok: String? = null, pending: String? = null, patch: ((JSONObject) -> Unit)? = null) {
+        if (patch != null) data?.let { cur -> data = JSONObject(cur.toString()).also(patch) }
+        if (pending != null) { pcPending = pending; pcPendingAt = System.currentTimeMillis() }
+        ok?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+        inflight++
         scope.launch {
-            busy = true
+            var failed = false
             try {
                 withContext(Dispatchers.IO) { Api.post(ctx, path, body) }
-                ok?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                 cz.filip.missioncontrol.widget.McWidget.refresh(ctx)
                 delay(600)
-                load()
             } catch (e: ApiError) {
+                failed = true
+                if (pending != null) pcPending = null
                 Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
             } finally {
-                busy = false
+                inflight--
             }
+            load(force = failed)
         }
     }
 
@@ -154,13 +170,24 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                 if (error == null) Text("Loading…", color = Mc.Muted)
                 return@Column
             }
-            PcCard(d, busy, onWake = { act("/api/pc/wake", ok = "Wake sent") }, onSleep = { sleepDialog = true })
+            PcCard(d, busy || pcPending != null, pcPending, onWake = { act("/api/pc/wake", ok = "Wake sent", pending = "wake") }, onSleep = { sleepDialog = true })
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 RoomTile(d.getJSONObject("room"), Modifier.weight(1f))
-                LightsTile(d.getJSONObject("lights"), Modifier.weight(1f)) { on -> act("/api/lights", JSONObject().put("on", on)) }
+                LightsTile(d.getJSONObject("lights"), Modifier.weight(1f)) { on ->
+                    if (!busy) act("/api/lights", JSONObject().put("on", on)) { h ->
+                        h.getJSONObject("lights").put("applied", if (on) "on" else "off").put("want", if (on) "on" else "off")
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AutoSleepTile(d.getJSONObject("autosleep"), Modifier.weight(1f)) { path, body -> act(path, body) }
+                AutoSleepTile(d.getJSONObject("autosleep"), Modifier.weight(1f)) { path, body ->
+                    act(path, body) { h ->
+                        val a = h.getJSONObject("autosleep")
+                        if (body.has("enabled")) a.put("enabled", body.getBoolean("enabled"))
+                        if (body.has("idle_min")) a.put("idle_min", body.getInt("idle_min"))
+                        if (body.has("minutes")) a.put("keep_awake_until", System.currentTimeMillis() / 1000.0 + body.getInt("minutes") * 60)
+                    }
+                }
                 PiTile(d.getJSONObject("pi"), Modifier.weight(1f))
             }
             WaitingCard(d.getJSONObject("claude"))
@@ -173,7 +200,7 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             onDismissRequest = { sleepDialog = false },
             title = { Text("Put the PC to sleep?") },
             text = { Text("It sleeps right away, even if something is running.") },
-            confirmButton = { TextButton(onClick = { sleepDialog = false; act("/api/pc/sleep", ok = "Sleep sent") }) { Text("Sleep") } },
+            confirmButton = { TextButton(onClick = { sleepDialog = false; act("/api/pc/sleep", ok = "Sleep sent", pending = "sleep") }) { Text("Sleep") } },
             dismissButton = { TextButton(onClick = { sleepDialog = false }) { Text("Cancel") } },
             containerColor = Mc.Card,
         )
@@ -181,20 +208,20 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
 }
 
 @Composable
-private fun PcCard(d: JSONObject, busy: Boolean, onWake: () -> Unit, onSleep: () -> Unit) {
+private fun PcCard(d: JSONObject, busy: Boolean, pending: String?, onWake: () -> Unit, onSleep: () -> Unit) {
     val pc = d.getJSONObject("pc")
     val auto = d.getJSONObject("autosleep")
     val online = pc.optBoolean("online")
     McCard {
         Label("Gaming PC")
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (online) "Awake" else "Asleep", color = Mc.Text, fontSize = 40.sp, fontWeight = FontWeight.Bold,
+            Text(if (pending == "wake" && !online) "Waking…" else if (pending == "sleep" && online) "Sleeping…" else if (online) "Awake" else "Asleep", color = Mc.Text, fontSize = 40.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f))
             Box(Modifier.size(14.dp).clip(CircleShape).background(if (online) Mc.Good else Mc.Idle))
         }
         val since = pc.optDouble("since").takeIf { !it.isNaN() }?.let { "Since ${clock(it)}" }
         val autoLine = if (auto.optBoolean("enabled")) "auto-sleep after ${auto.optInt("idle_min")} min idle" else "auto-sleep off"
-        val sleeping = if (pc.optBoolean("sleep_pending")) "going to sleep…" else null
+        val sleeping = if (pc.optBoolean("sleep_pending") || (pending == "sleep" && online)) "going to sleep…" else null
         Text(listOfNotNull(since, sleeping ?: autoLine).joinToString(" · "), color = Mc.Muted, fontSize = 15.sp)
         Spacer(Modifier.height(14.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

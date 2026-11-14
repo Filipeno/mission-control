@@ -28,14 +28,20 @@ class GateAnswerActivity : FragmentActivity() {
                 val ts = System.currentTimeMillis() / 1000
                 Signer.sign(this, (if (decision == "allow") "Allow: " else "Deny: ") + summary.take(80), "gate|$gate|$decision||$ts") { sig, err ->
                     if (sig == null) { toast(err ?: "Cancelled"); return@sign finish() }
+                    // Fingerprint done: close the notification and the screen now; the answer goes out in the background.
+                    val nm = app.getSystemService(NotificationManager::class.java)
+                    nm.cancel(notif)
+                    toast(if (decision == "allow") "Allowed" else "Denied")
                     thread {
-                        val msg = try {
+                        try {
                             Api.post(app, "/api/gate/$gate/answer", JSONObject().put("decision", decision).put("payload", "").put("ts", ts).put("sig", sig))
-                            app.getSystemService(NotificationManager::class.java).cancel(notif)
-                            if (decision == "allow") "Allowed" else "Denied"
-                        } catch (e: Exception) { e.message ?: "Failed" }
-                        runOnUiThread { toast(msg); finish() }
+                        } catch (e: Exception) {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                Toast.makeText(app, "Not sent: ${e.message ?: "failed"}. Answer it in the app.", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
+                    finish()
                 }
             }
         }

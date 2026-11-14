@@ -110,6 +110,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     var live by remember { mutableStateOf<JSONObject?>(null) }       // /api/sessions
     var openSid by remember { mutableStateOf<String?>(null) }
     var gateConfig by remember { mutableStateOf(false) }
+    var answered by remember { mutableStateOf(setOf<String>()) }     // approvals answered on this phone, hidden at once
 
     suspend fun load() {
         try {
@@ -147,18 +148,23 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
             }
             Signer.sign(act, a.optString("title"), msg) { sig, err ->
                 if (sig == null) { busy = null; err?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }; return@sign }
+                // Fingerprint done: the card disappears now, the answer travels in the background.
+                busy = null
+                answered = answered + id
+                Toast.makeText(ctx, "Sent", Toast.LENGTH_SHORT).show()
                 scope.launch {
                     try {
                         val r = withContext(Dispatchers.IO) {
                             Api.post(ctx, "/api/approvals/$id/answer", JSONObject().put("decision", decision)
                                 .put("option", option).put("text", text).put("ts", ts).put("sig", sig))
                         }
-                        Toast.makeText(ctx, if (r.optBoolean("woke_pc")) "Sent. Waking the PC…" else "Sent", Toast.LENGTH_SHORT).show()
+                        if (r.optBoolean("woke_pc")) Toast.makeText(ctx, "Waking the PC…", Toast.LENGTH_SHORT).show()
                     } catch (e: ApiError) {
+                        answered = answered - id      // not delivered: the card comes back
                         if (e.code == 403 && e.message?.contains("key") == true) runCatching { withContext(Dispatchers.IO) { Signer.register(ctx) } }
-                        Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                        Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show()
                     } finally {
-                        busy = null; load()
+                        load()
                     }
                 }
             }
@@ -189,7 +195,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                     Text("The PC helper is not reporting, so this may be old.", color = Mc.Warn, fontSize = 13.sp)
                 }
 
-                val approvals = d.optJSONArray("approvals").objects()
+                val approvals = d.optJSONArray("approvals").objects().filter { it.optString("id") !in answered }
                 if (approvals.isNotEmpty()) Label("Approvals · ${approvals.size}", Mc.Warn)
                 val asks = (live?.optJSONArray("gates")?.length() ?: 0) + (live?.optJSONArray("proposals")?.length() ?: 0)
                 if (approvals.isEmpty() && asks == 0) Text("Nothing is waiting for you.", color = Mc.Muted, fontSize = 14.sp)
@@ -424,17 +430,19 @@ private fun IdeaDock(audioMode: Boolean) {
     }
 
     fun send(audio: ByteArray? = null) {
+        val sent = text
         sending = true
+        text = ""                       // the box empties and the toast shows at once; the text comes back if the Pi refuses
+        Toast.makeText(ctx, "Sent to Claude's inbox", Toast.LENGTH_SHORT).show()
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    if (audio != null) Api.bytes(ctx, "/api/ideas?text=" + java.net.URLEncoder.encode(text, "UTF-8"), audio, "audio/mp4")
-                    else Api.post(ctx, "/api/ideas", JSONObject().put("text", text.trim()))
+                    if (audio != null) Api.bytes(ctx, "/api/ideas?text=" + java.net.URLEncoder.encode(sent, "UTF-8"), audio, "audio/mp4")
+                    else Api.post(ctx, "/api/ideas", JSONObject().put("text", sent.trim()))
                 }
-                text = ""
-                Toast.makeText(ctx, "Sent to Claude's inbox", Toast.LENGTH_SHORT).show()
-            } catch (e: ApiError) {
-                Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                if (text.isBlank()) text = sent
+                Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show()
             } finally { sending = false }
         }
     }

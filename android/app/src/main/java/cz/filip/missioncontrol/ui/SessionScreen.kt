@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -86,7 +87,11 @@ private fun JSONArray?.objs(): List<JSONObject> = if (this == null) emptyList() 
  * Fingerprint, sign "[msg]|ts", then POST [body] + ts + sig to [path]. Registers the signing key first if
  * mc-pi has none. Calls [done] on the main thread with null (ok) or an error text.
  */
-fun signedPost(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, done: (String?) -> Unit) {
+fun signedPost(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, done: (String?) -> Unit) =
+    signedPostEx(ctx, title, msg, path, body, hasKey0, {}, done)
+
+/** Like [signedPost], but calls [onSigned] (main thread) the moment the fingerprint succeeds, before the Pi has answered: update the UI there. */
+fun signedPostEx(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, onSigned: () -> Unit, done: (String?) -> Unit) {
     val hasKey = hasKey0 && !Signer.needsRegister(ctx)
     val act = ctx as? FragmentActivity ?: return done("no activity")
     val scope = kotlinx.coroutines.MainScope()
@@ -100,6 +105,7 @@ fun signedPost(ctx: Context, title: String, msg: String, path: String, body: JSO
         }
         Signer.sign(act, title, "$msg|$ts") { sig, err ->
             if (sig == null) { done(err ?: "cancelled"); return@sign }
+            onSigned()
             scope.launch {
                 try {
                     withContext(Dispatchers.IO) { Api.post(ctx, path, body.put("ts", ts).put("sig", sig)) }
@@ -198,8 +204,9 @@ fun GateConfigDialog(current: String, hasKey: Boolean, onClose: () -> Unit) {
         confirmButton = {
             val next = if (current == "readonly") "none" else "readonly"
             TextButton(onClick = {
-                signedPost(ctx, "Auto-approve: $next", "gate-config|$next|1", "/api/gate/config", JSONObject().put("auto", next).put("enabled", true), hasKey) { err ->
-                    Toast.makeText(ctx, err ?: "Saved", Toast.LENGTH_SHORT).show(); onClose()
+                signedPostEx(ctx, "Auto-approve: $next", "gate-config|$next|1", "/api/gate/config", JSONObject().put("auto", next).put("enabled", true), hasKey,
+                    onSigned = { Toast.makeText(ctx, "Saved", Toast.LENGTH_SHORT).show(); onClose() }) { err ->
+                    if (err != null) { Toast.makeText(ctx, "Not saved: $err", Toast.LENGTH_LONG).show(); onClose() }
                 }
             }) { Text(if (current == "readonly") "Ask for everything" else "Allow read-only tools") }
         },
@@ -214,7 +221,9 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
     var error by remember { mutableStateOf<String?>(null) }
     var resumed by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }               // waiting for the fingerprint
+    var gone by remember { mutableStateOf(setOf<String>()) }     // gates / proposals answered here: hidden at once
+    val sending = remember { mutableStateListOf<String>() }      // messages typed here that the Pi has not confirmed yet
     val scroll = rememberScrollState()
     BackHandler(onBack = onBack)
 
@@ -239,12 +248,6 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
     LaunchedEffect(rows.size, data?.optJSONArray("gates")?.length()) { if (stick) scroll.animateScrollTo(scroll.maxValue) }
 
     val s = data?.optJSONObject("session")
-    fun done(msg: String): (String?) -> Unit = { err ->
-        busy = false
-        Toast.makeText(ctx, err ?: msg, if (err == null) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
-        scope.launch { load() }
-    }
-
     Column(modifier.fillMaxSize().imePadding()) {
         // Header: back, title (2 lines), then folder · state · Claude app link
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 10.dp), verticalAlignment = Alignment.Top) {
@@ -282,18 +285,44 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                         androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(900), androidx.compose.animation.core.RepeatMode.Reverse), label = "a")
                     Text("● Claude is working…", color = Mc.Accent.copy(alpha = a), fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
                 }
-                d.optJSONArray("gates").objs().forEach { g -> GateCard(g, busy) { decision, payload, label ->
+                d.optJSONArray("gates").objs().filter { "gate:" + it.optString("id") !in gone }.forEach { g -> GateCard(g, busy) { decision, payload, label ->
+                    val key = "gate:" + g.optString("id")
                     busy = true
-                    signedPost(ctx, label, "gate|${g.optString("id")}|$decision|$payload", "/api/gate/${g.optString("id")}/answer",
-                        JSONObject().put("decision", decision).put("payload", payload), hasKey, done("Sent to the PC"))
+                    signedPostEx(ctx, label, "gate|${g.optString("id")}|$decision|$payload", "/api/gate/${g.optString("id")}/answer",
+                        JSONObject().put("decision", decision).put("payload", payload), hasKey,
+                        onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() }) { err ->
+                        busy = false
+                        if (err != null) { gone = gone - key; Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show() }
+                        scope.launch { load() }
+                    }
                 } }
-                d.optJSONArray("proposals").objs().forEach { p -> ProposalCard(p, busy,
+                d.optJSONArray("proposals").objs().filter { "prop:" + it.optString("key") !in gone }.forEach { p -> ProposalCard(p, busy,
                     onStart = {
+                        val key = "prop:" + p.optString("key")
                         busy = true
-                        signedPost(ctx, "Start: ${p.optString("title")}", "start|${p.optString("key")}", "/api/proposals/${p.optString("key")}/start",
-                            JSONObject(), hasKey, done("Start sent to the session"))
+                        signedPostEx(ctx, "Start: ${p.optString("title")}", "start|${p.optString("key")}", "/api/proposals/${p.optString("key")}/start",
+                            JSONObject(), hasKey,
+                            onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Start sent to the session", Toast.LENGTH_SHORT).show() }) { err ->
+                            busy = false
+                            if (err != null) { gone = gone - key; Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show() }
+                            scope.launch { load() }
+                        }
                     },
-                    onHide = { scope.launch { runCatching { withContext(Dispatchers.IO) { Api.post(ctx, "/api/proposals/${p.optString("key")}/hide") } }; load() } }) }
+                    onHide = {
+                        val key = "prop:" + p.optString("key")
+                        gone = gone + key
+                        scope.launch {
+                            try { withContext(Dispatchers.IO) { Api.post(ctx, "/api/proposals/${p.optString("key")}/hide") } }
+                            catch (e: ApiError) { gone = gone - key; Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show() }
+                            load()
+                        }
+                    }) }
+                sending.forEach { t ->
+                    Box(Modifier.fillMaxWidth().padding(start = 40.dp)) {
+                        Text(t + "  · sending…", color = Mc.Muted, fontSize = 15.sp, lineHeight = 21.sp, modifier = Modifier.align(Alignment.CenterEnd)
+                            .clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(Color(0xFF16384D)).padding(horizontal = 12.dp, vertical = 9.dp))
+                    }
+                }
                 d.optJSONArray("outbox").objs().takeIf { it.isNotEmpty() }?.let { out ->
                     Label("Sent from the phone")
                     out.forEach { o ->
@@ -324,8 +353,17 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                 IconButton(enabled = !busy && text.isNotBlank(), onClick = {
                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     val t = text.trim(); busy = true
-                    signedPost(ctx, "Send to ${s.optString("title").take(40)}", "msg|$sid|$t", "/api/sessions/$sid/message",
-                        JSONObject().put("text", t), hasKey) { err -> if (err == null) text = ""; done("Sent to the PC")(err) }
+                    signedPostEx(ctx, "Send to ${s.optString("title").take(40)}", "msg|$sid|$t", "/api/sessions/$sid/message",
+                        JSONObject().put("text", t), hasKey,
+                        onSigned = { busy = false; if (text.trim() == t) text = ""; sending.add(t) }) { err ->
+                        busy = false
+                        if (err != null) {
+                            sending.remove(t)
+                            if (text.isBlank()) text = t
+                            Toast.makeText(ctx, if (err == "cancelled") err else "Not sent: $err", Toast.LENGTH_LONG).show()
+                        }
+                        scope.launch { load(); sending.remove(t) }
+                    }
                 }, modifier = Modifier.padding(bottom = 3.dp).size(50.dp).clip(RoundedCornerShape(14.dp))
                     .background(if (!busy && text.isNotBlank()) Mc.Accent else Mc.ButtonDark)) {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send",
