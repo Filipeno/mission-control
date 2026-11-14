@@ -34,7 +34,7 @@ Native Android control panel that replaces the PC Waker app. Look: **A · Dark d
 4. **Claude tab**: mc-pc helper, sessions, approval queue with fingerprint, ideas, usage card for Claude, Codex, Gemini, Antigravity.
 5. **Docs & Checklists**: files on the Pi, Pass/Fail/Skip + note, screenshot attach, line comments, edit on the phone, results readable by Claude.
 6. **System tab + widget**: PC screenshot and temps, Pi and mini PC health, Vaultwarden backup age, tunnel, bp-gateway, Slime Keepers (with earnings), timeline, Glance widget.
-7. **Retire the PC Waker app** after a week of Mission Control working.
+7. ~~**Retire the PC Waker app**~~ done 2026-11-14 (see `docs/stage7-done.md`). Page link and APK endpoints removed, `android/` archived. Filip still uninstalls the app from the phone.
 
 ## 5. Settings screen (collected so far)
 - Wake PC when I approve (off)
