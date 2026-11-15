@@ -1,23 +1,17 @@
 # mc-type: puts a message Filip sent from Mission Control into a Claude Desktop session, as if typed at the PC.
-# Experimental (Filip's choice, 2026-11-10). Only runs when the PC is unlocked and nobody has touched it
-# for -IdleSec seconds. Opens the session through the app's own claude:// link, checks the open session is
+# Experimental (Filip's choice, 2026-11-10). Only runs when the PC is unlocked; there is no idle check any
+# more (Filip, 2026-11-15: answering from the phone means he is not at the PC). Opens the session through the app's own claude:// link, checks the open session is
 # the right one and its prompt box is empty (never mixes with a draft), pastes the text and presses Enter.
-# Exit codes: 0 sent, 2 bad arguments, 3 PC locked, 4 PC in use, 5 draft in the prompt box,
+# Exit codes: 0 sent, 2 bad arguments, 3 PC locked, 5 draft in the prompt box,
 #             6 session/prompt box not found, 7 wrong session open.
 param([Parameter(Mandatory)][string]$Local, [Parameter(Mandatory)][string]$Title,
-      [Parameter(Mandatory)][string]$TextFile, [int]$IdleSec = 120)
+      [Parameter(Mandatory)][string]$TextFile)
 $ErrorActionPreference = 'Stop'
 if ($Local -notmatch '^local_[0-9a-f-]{36}$' -or -not (Test-Path -LiteralPath $TextFile)) { exit 2 }
 $text = [IO.File]::ReadAllText($TextFile, [Text.Encoding]::UTF8)
 if (-not $text.Trim()) { exit 2 }
 
-Add-Type -Namespace McType -Name Native -MemberDefinition @'
-[StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
-[DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
-public static uint IdleMs() { var i = new LASTINPUTINFO(); i.cbSize = (uint)Marshal.SizeOf(i); if (!GetLastInputInfo(ref i)) return 0; return unchecked((uint)Environment.TickCount - i.dwTime); }
-'@
 if (Get-Process LogonUI -ErrorAction SilentlyContinue) { exit 3 }
-if ([McType.Native]::IdleMs() -lt $IdleSec * 1000) { exit 4 }
 
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 $AE = [Windows.Automation.AutomationElement]

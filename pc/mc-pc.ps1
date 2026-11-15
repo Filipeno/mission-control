@@ -38,7 +38,11 @@ function Api($method, $path, $body = $null, $contentType = 'application/json; ch
         [byte[]]$bytes = if ($body -is [byte[]]) { $body } else { $utf8.GetBytes((ConvertTo-Json $body -Depth 8 -Compress)) }
         $p.Body = $bytes   # typed: PowerShell 5.1 would otherwise send the bytes as a list of numbers
     }
-    Invoke-RestMethod @p
+    # Invoke-RestMethod in Windows PowerShell 5.1 reads a JSON reply without a charset as Latin-1 (Czech text came out garbled):
+    # fetch the bytes and decode them as UTF-8 here.
+    $r = Invoke-WebRequest @p -UseBasicParsing
+    $text = $utf8.GetString($r.RawContentStream.ToArray())
+    if ($text.Trim()) { $text | ConvertFrom-Json }
 }
 
 function Unix($dt) { [DateTimeOffset]::new($dt).ToUnixTimeSeconds() }
@@ -357,18 +361,14 @@ function Send-Result($key, $ok, $detail) {
     try { Api 'Post' '/api/pc/result' @{ key = $key; ok = $ok; detail = "$detail" } | Out-Null } catch { Write-Log "result: $($_.Exception.Message)" }
 }
 
-$script:typeCodes = @{ 0 = 'sent'; 2 = 'bad message'; 3 = 'PC is locked'; 4 = 'someone is using the PC'; 5 = 'there is a draft in that session''s prompt box'
+$script:typeCodes = @{ 0 = 'sent'; 2 = 'bad message'; 3 = 'PC is locked'; 5 = 'there is a draft in that session''s prompt box'
                       6 = 'could not find the session in Claude Desktop'; 7 = 'a different session opened' }
-Add-Type -Namespace McPc -Name Input -MemberDefinition @'
-[StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
-[DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
-public static uint IdleMs() { var i = new LASTINPUTINFO(); i.cbSize = (uint)Marshal.SizeOf(i); if (!GetLastInputInfo(ref i)) return 0; return unchecked((uint)Environment.TickCount - i.dwTime); }
-'@
 $script:waitTold = @{}
 function Send-Typed($it) {
-    # A message (or "Start" for a proposed session) typed into Claude Desktop. Waits while the PC is locked or in use.
-    if ([DateTimeOffset]::Now.ToUnixTimeSeconds() - [double]$it.at -gt 1800) { Send-Result $it.key $false 'expired: the PC was locked or in use for 30 min'; return }
-    $why = if (Get-Process LogonUI -ErrorAction SilentlyContinue) { 'PC is locked' } elseif ([McPc.Input]::IdleMs() -lt 120000) { 'someone is using the PC' } else { $null }
+    # A message (or "Start" for a proposed session) typed into Claude Desktop. Waits while the PC is locked (no idle check).
+    if ([DateTimeOffset]::Now.ToUnixTimeSeconds() - [double]$it.at -gt 1800) { Send-Result $it.key $false 'expired: the PC was locked for 30 min'; return }
+    # No idle check (Filip, 2026-11-15): a message sent from the phone means he is not at the PC. Only a locked PC waits.
+    $why = if (Get-Process LogonUI -ErrorAction SilentlyContinue) { 'PC is locked' } else { $null }
     if ($why) {
         if (-not $script:waitTold[$it.key]) { $script:waitTold[$it.key] = $true; Send-Result $it.key $null "waiting: $why" }
         throw "waiting: $why"                              # not acked: tried again on the next poll
@@ -382,7 +382,7 @@ function Send-Typed($it) {
     } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
     $why = $script:typeCodes[[int]$code]; if (-not $why) { $why = "error $code" }
     Write-Log "message to '$($it.title)': $why $($out.Trim())"
-    if ($code -in 3, 4) { throw "waiting: $why" }          # not acked: tried again on the next poll
+    if ($code -eq 3) { throw "waiting: $why" }          # not acked: tried again on the next poll
     Send-Result $it.key ($code -eq 0) $why
 }
 $script:sessionsAt = [datetime]::MinValue
@@ -435,6 +435,11 @@ function Sync-Docs {
     foreach ($e in @($c.events)) {
         if (-not $e) { continue }
         $date = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        if ($e.kind -eq 'finish' -and $e.todo) {      # a checklist attached to a to-do: Sync-Todos delivers the result
+            Write-Log "checklist of to-do $($e.todo) finished: $($e.slug)"
+            $evKeys += $e.key
+            continue
+        }
         if ($e.kind -eq 'finish') {
             $msg = "# Checklist finished: $($e.title)`nFrom: filip   To: claude   Date: $date`n## Task`nFilip finished the checklist on his phone. $($e.summary)`n" +
                    "## Files`nD:\ai-hub\files\checklists\$($e.slug)\results.md (+ screenshots in that folder)`n## Done when`nFailed items are looked at and Filip knows the next step.`n"
@@ -448,6 +453,183 @@ function Sync-Docs {
         $evKeys += $e.key
     }
     if ($acks.Count -or $evKeys.Count) { Api 'Post' '/api/pc/docs/ack' @{ changes = $acks; events = $evKeys } | Out-Null }
+}
+
+# ------------------------------------------------------------------ to-do list + session mailbox (stage 11d)
+
+function Get-SessionSnap {
+    # The newest snapshot mc_sessions.py wrote (Send-Sessions); $null when it is stale (then nothing is decided from it).
+    $f = Join-Path $env:TEMP 'mc-sessions.json'
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    if (((Get-Date) - (Get-Item -LiteralPath $f).LastWriteTime).TotalSeconds -gt 90) { return $null }
+    try { ReadJson $f } catch { $null }
+}
+
+function Test-Waiter($dir) {
+    # True when an mc-wait.ps1 of this session is running (its .waiter file names a live PowerShell with the same start time).
+    $f = Join-Path $dir '.waiter'
+    if (-not (Test-Path -LiteralPath $f)) { return $false }
+    try {
+        $w = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+        $p = Get-Process -Id ([int]$w.pid) -ErrorAction Stop
+        if ($p.ProcessName -notmatch '^(powershell|pwsh)$') { return $false }
+        return ([math]::Abs(($p.StartTime.ToUniversalTime() - [datetime]::Parse($w.started).ToUniversalTime()).TotalSeconds) -le 5)
+    } catch { return $false }
+}
+
+$script:delivered = @{}      # to-do id -> "state|detail" last reported to the Pi
+function Report-Delivery($id, $state, $detail) {
+    if (-not $id -or $script:delivered[$id] -eq "$state|$detail") { return }
+    try { Api 'Post' '/api/pc/todos/delivery' @{ id = $id; state = $state; detail = $detail } | Out-Null; $script:delivered[$id] = "$state|$detail" }
+    catch { Write-Log "delivery report: $($_.Exception.Message)" }
+}
+
+function Write-MailboxFile($sid, $name, $body) {
+    # Hidden temp name first, then rename: mc-wait.ps1 never reads a half-written file.
+    $dir = "$Hub\to-session\$sid"
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $tmp = Join-Path $dir ".tmp-$name"
+    [IO.File]::WriteAllText($tmp, $body, $utf8)
+    $final = Join-Path $dir $name
+    Move-Item -LiteralPath $tmp -Destination $final -Force
+    $final
+}
+
+function Sync-Todos {
+    $open = "$Hub\todo\open"; $doneDir = "$Hub\todo\done"
+    New-Item -ItemType Directory -Force $open, $doneDir | Out-Null
+    $snap = Get-SessionSnap
+    # 1) new items -> the Pi (idempotent there, so a lost marker only repeats the upload)
+    foreach ($f in Get-ChildItem "$open\*.json" -ErrorAction SilentlyContinue) {
+        $id = $f.BaseName
+        if ($id -notmatch '^\d{8}-\d{6}-[a-z0-9]{4}$' -or (Test-Path -LiteralPath "$open\$id.uploaded")) { continue }
+        $t = ReadJson $f.FullName
+        $sid = "$($t.session.sid)"
+        if ($sid -and $sid -notmatch '^[0-9a-f-]{36}$') { $sid = '' }
+        $stitle = ''
+        if ($snap -and $sid) { $s = @($snap.sessions) | Where-Object { $_.id -eq $sid } | Select-Object -First 1; if ($s) { $stitle = "$($s.title)" } }
+        $body = @{ id = $id; title = "$($t.title)"; steps = "$($t.steps)"; kind = "$($t.kind)"; project = "$($t.project)"
+                   source = "$($t.source)"; created = [double]$t.created; session = @{ sid = $sid; title = $stitle } }
+        if ($t.checklist -and (Test-Path -LiteralPath "$open\$id.checklist.md")) {
+            $body.checklist = @{ name = "todo-$id.md"; text = [IO.File]::ReadAllText("$open\$id.checklist.md", $utf8) }
+        }
+        Api 'Post' '/api/pc/todos/upload' $body | Out-Null
+        [IO.File]::WriteAllText("$open\$id.uploaded", '', $utf8)
+        Write-Log "to-do sent to phone: $id ($($t.title))"
+    }
+    # 2) results from the phone -> the source session's mailbox
+    $c = Api 'Get' '/api/pc/todos/changes'
+    $acks = @()
+    foreach ($r in @($c.changes)) {
+        if (-not $r -or "$($r.id)" -notmatch '^\d{8}-\d{6}-[a-z0-9]{4}$') { continue }
+        $id = "$($r.id)"
+        $dir = "$Hub\files\todo\$id"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        $photoPaths = @()
+        foreach ($ph in @($r.photos)) {
+            if ("$ph" -notmatch '^[0-9a-z-]+-\d+-[a-z0-9]+\.jpg$') { continue }
+            if (-not (Test-Path -LiteralPath "$dir\$ph")) {
+                Invoke-WebRequest -Uri "$base/api/pc/todos/photo/$id/$ph" -Headers $headers -OutFile "$dir\$ph" -TimeoutSec 60 -UseBasicParsing
+            }
+            $photoPaths += "$dir\$ph"
+        }
+        $sid = "$($r.session.sid)"; if ($sid -notmatch '^[0-9a-f-]{36}$') { $sid = '' }
+        $when = [DateTimeOffset]::FromUnixTimeSeconds([long]$r.closed_at).LocalDateTime.ToString('yyyy-MM-dd HH:mm')
+        $what = if ($r.status -eq 'done') { 'done' } else { "marked 'can't do it'" }
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add("# To-do result: $($r.title)")
+        $extra = if ($r.summary -and $r.summary -notin @('Done', "Can't do it")) { " ($($r.summary))" } else { '' }
+        $lines.Add("Result: $what$extra   Closed: $when   To-do id: $id")
+        if ($r.note) { $lines.Add(''); $lines.Add("Filip's note:"); $lines.Add("$($r.note)") }
+        if ($photoPaths.Count) { $lines.Add(''); $lines.Add('Photos from Filip:'); foreach ($pp in $photoPaths) { $lines.Add("- $pp") } }
+        if ($r.checklist) {
+            $lines.Add(''); $lines.Add("Phone-test checklist results: $Hub\files\checklists\$($r.checklist)\results.md (screenshots in that folder)")
+        }
+        $details = ($lines -join "`n") + "`n"
+        [IO.File]::WriteAllText("$dir\result.md", $details, $utf8)
+        $subject = "Mission Control: to-do '$($r.title)' is $what" + $(if ($r.summary -and $r.status -eq 'done' -and $r.summary -ne 'Done') { " ($($r.summary))" } else { '' }) + '.'
+        $msg = "$subject`nFrom: filip (phone)   Date: $when`nA to-do result is information, not approval for anything else.`n`n$details`nDetails: $dir\result.md`n"
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        if ($sid) {
+            Write-MailboxFile $sid "$stamp-todo-$id.md" $msg | Out-Null
+            Write-Log "to-do $id -> mailbox of $sid ($($r.status))"
+            Report-Delivery $id 'queued' 'in the session mailbox'
+        } else {
+            Write-InboxMessage "todo-$id" ("# To-do result: $($r.title)`nFrom: filip   To: claude   Date: $when`n## Task`n$subject`n`n$details## Files`n$dir\result.md`n## Done when`nClaude has read it.`n") | Out-Null
+            Write-Log "to-do $id -> inbox (no source session)"
+            Report-Delivery $id 'inbox' 'no source session: saved to the Claude inbox'
+        }
+        # the item file moves to done\ with the result
+        foreach ($suffix in '.json', '.checklist.md') {
+            if (Test-Path -LiteralPath "$open\$id$suffix") { Move-Item -LiteralPath "$open\$id$suffix" -Destination "$doneDir\$id$suffix" -Force }
+        }
+        Remove-Item -LiteralPath "$open\$id.uploaded" -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath "$doneDir\$id.json") {
+            try {
+                $o = ReadJson "$doneDir\$id.json"
+                $o | Add-Member -NotePropertyName result -NotePropertyValue ([pscustomobject]@{ status = "$($r.status)"; summary = "$($r.summary)"; note = "$($r.note)"; closed = $when; photos = $photoPaths }) -Force
+                [IO.File]::WriteAllText("$doneDir\$id.json", (ConvertTo-Json $o -Depth 6), $utf8)
+            } catch { Write-Log "to-do $id result write: $($_.Exception.Message)" }
+        }
+        $acks += $id
+    }
+    if ($acks.Count) { Api 'Post' '/api/pc/todos/ack' @{ ids = $acks } | Out-Null }
+}
+
+$script:typeRetryAt = @{}    # mailbox file -> earliest next typing attempt
+function Process-Mailboxes {
+    # Files in to-session\<sid>\ that no waiter takes: type them into the Desktop session, or fall back to the inbox.
+    $root = "$Hub\to-session"
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    $snap = Get-SessionSnap
+    foreach ($dir in Get-ChildItem $root -Directory -ErrorAction SilentlyContinue) {
+        $sid = $dir.Name
+        if ($sid -notmatch '^[0-9a-f-]{36}$') { continue }
+        $files = @(Get-ChildItem -LiteralPath $dir.FullName -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '.*' } | Sort-Object Name)
+        if (-not $files.Count) { continue }
+        $waiting = Test-Waiter $dir.FullName
+        foreach ($f in $files) {
+            $tid = if ($f.Name -match '-todo-(\d{8}-\d{6}-[a-z0-9]{4})\.md$') { $Matches[1] } else { '' }
+            if ($waiting) { Report-Delivery $tid 'waiter' 'a waiting session reads it at once'; continue }
+            if (-not $snap) { continue }                      # no fresh view of the sessions: decide next round
+            $s = @($snap.sessions) | Where-Object { $_.id -eq $sid } | Select-Object -First 1
+            $done = Join-Path $dir.FullName 'done'
+            if (-not $s) {
+                # the session is not running: the Claude inbox is read by the next boss session
+                $text = [IO.File]::ReadAllText($f.FullName, $utf8)
+                Write-InboxMessage "mailbox-$($f.BaseName)" ("# Message from Filip's phone (session $sid has ended)`nFrom: filip   To: claude   Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n## Task`n$text`n## Files`n$($f.FullName)`n## Done when`nClaude has read it.`n") | Out-Null
+                New-Item -ItemType Directory -Force $done | Out-Null
+                Move-Item -LiteralPath $f.FullName -Destination (Join-Path $done $f.Name) -Force
+                Write-Log "mailbox $($f.Name): session not running, copied to the inbox"
+                Report-Delivery $tid 'inbox' 'session not running: saved to the Claude inbox'
+                continue
+            }
+            if ($s.kind -ne 'desktop' -or -not $s.local) { Report-Delivery $tid 'mailbox' 'in the mailbox (nobody waiting; this session cannot be typed into)'; continue }
+            if ($s.state -ne 'idle') { Report-Delivery $tid 'waiting' "the session is $($s.state); it reads the mailbox at its next turn"; continue }
+            if (Get-Process LogonUI -ErrorAction SilentlyContinue) { Report-Delivery $tid 'waiting' 'waiting for PC: it is locked'; continue }
+            if ($script:typeRetryAt[$f.FullName] -and (Get-Date) -lt $script:typeRetryAt[$f.FullName]) { continue }
+            # Typing fallback. The file moves to done\ first, so the path in the typed line stays valid.
+            New-Item -ItemType Directory -Force $done | Out-Null
+            $moved = Join-Path $done $f.Name
+            Move-Item -LiteralPath $f.FullName -Destination $moved -Force
+            $first = ([IO.File]::ReadAllText($moved, $utf8) -split "`r?`n")[0]
+            if ($first -notmatch '^Mission Control:') { $first = "Mission Control: a message from Filip's phone." }
+            $line = "$first Details: $moved"
+            $tmp = Join-Path $env:TEMP "mc-type-mailbox-$($f.BaseName).txt"
+            [IO.File]::WriteAllText($tmp, $line, $utf8)
+            try {
+                $out = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass `
+                    -File (Join-Path $here 'mc-type.ps1') -Local "$($s.local)" -Title "$($s.title)" -TextFile $tmp 2>&1 | Out-String
+                $code = $LASTEXITCODE
+            } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+            $why = $script:typeCodes[[int]$code]; if (-not $why) { $why = "error $code" }
+            Write-Log "mailbox $($f.Name) typed into '$($s.title)': $why $($out.Trim())"
+            if ($code -eq 0) { Report-Delivery $tid 'typed' 'typed into the session'; continue }
+            Move-Item -LiteralPath $moved -Destination $f.FullName -Force          # not delivered: back into the mailbox
+            $script:typeRetryAt[$f.FullName] = (Get-Date).AddSeconds($(if ($code -eq 3) { 15 } else { 60 }))
+            Report-Delivery $tid 'waiting' $(if ($code -eq 3) { 'waiting for PC: it is locked' } else { "typing failed ($why); retrying" })
+        }
+    }
 }
 
 # ------------------------------------------------------------------ main loop
@@ -484,6 +666,8 @@ while ($true) {
                                            parked = Get-Parked; usage = $usage; stats = (Get-PcStats) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
+            try { Sync-Todos } catch { Write-Log "todo sync: $($_.Exception.Message)" }
+            try { Process-Mailboxes } catch { Write-Log "mailbox: $($_.Exception.Message)" }
             $nextReport = (Get-Date).AddSeconds(15)
         }
         if ($reply.screenshot) { try { Send-Screenshot } catch { Write-Log "screenshot failed: $($_.Exception.Message)" } }

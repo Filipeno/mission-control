@@ -94,7 +94,7 @@ class DocsHub:
         return self.index[slug]
 
     # ------------------------------------------------------------ from the PC
-    def upload(self, kind: str, name: str, text: str) -> dict:
+    def upload(self, kind: str, name: str, text: str, todo: str = "") -> dict:
         if kind not in ("checklist", "doc") or len(text) > MAX_TEXT:
             raise ValueError("bad upload")
         slug = slugify(name)
@@ -102,6 +102,9 @@ class DocsHub:
             old = self.index.get(slug)
             if old and (self.dir / f"{slug}.md").exists():
                 if self._text(slug) == text:
+                    if todo and old.get("todo") != todo:
+                        old["todo"] = todo
+                        self._save("index.json", self.index)
                     return old
                 v = old.get("version", 1)
                 shutil.copy(self.dir / f"{slug}.md", self.dir / "old" / f"{slug}.v{v}.md")
@@ -111,6 +114,8 @@ class DocsHub:
             self.index[slug] = {"slug": slug, "kind": kind, "title": title_of(text, slug), "file": name[:100],
                                 "version": (old or {}).get("version", 0) + 1, "updated": time.time(),
                                 "updated_by": "Claude", "seq": (old or {}).get("seq", 0), "acked": (old or {}).get("acked", 0)}
+            if todo or (old or {}).get("todo"):
+                self.index[slug]["todo"] = todo or old["todo"]       # the to-do item this checklist belongs to
             self._save("index.json", self.index)
             return self.index[slug]
 
@@ -262,8 +267,23 @@ class DocsHub:
                 d["finished_at"] = time.time()
                 self._put(slug, d)
             self.events.append({"key": secrets.token_hex(6), "kind": kind, "slug": slug, "title": m["title"],
-                                "at": time.time(), "summary": self._summary_line(slug)})
+                                "at": time.time(), "summary": self._summary_line(slug), "todo": m.get("todo") or ""})
             self._save("events.json", self.events)
+
+    def todo_of(self, slug):
+        with self.lock:
+            return (self.index.get(slug) or {}).get("todo") or ""
+
+    def result_phrase(self, slug) -> str:
+        """"Done, 2 failed" for a finished checklist that belongs to a to-do item."""
+        with self.lock:
+            d = self._data(slug)
+            items = [b for b in parse(self._text(slug)) if b["t"] == "item"]
+            st = {k: v.get("status") for k, v in d["items"].items()}
+            failed = sum(1 for b in items if st.get(str(b["id"])) == "fail")
+            open_n = sum(1 for b in items if st.get(str(b["id"])) not in STATUSES)
+            out = f"Done, {failed} failed" if failed else "Done, all passed"
+            return out + (f", {open_n} not checked" if open_n else "")
 
     def _summary_line(self, slug):
         m = self.index[slug]

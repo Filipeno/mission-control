@@ -35,6 +35,7 @@ from pathlib import Path
 from claude_hub import ClaudeHub
 from sessions_hub import SessionsHub
 from docs_hub import DocsHub
+from todo_hub import TodoHub
 from system_hub import SystemHub
 
 HERE = Path(__file__).resolve().parent
@@ -413,6 +414,7 @@ class AppState:
         self.claude = ClaudeHub(STATE, load_json, save_json)
         self.sessions = SessionsHub(self.claude, load_json, save_json, self.deliver)
         self.docs = DocsHub(STATE)
+        self.todos = TodoHub(STATE)
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
 
     def deliver(self, msg: dict) -> None:
@@ -514,6 +516,7 @@ def build_home(state: AppState) -> dict:
         "lights": st.get("pc_lights") or {},
         "claude": {"sessions": len(lv["sessions"]) or len(sessions), "waiting": len(titles), "waiting_titles": titles[:5]},
         "pi": pi_health(),
+        "todos": {"open": state.todos.open_count()},
         "recent": (st.get("notify") or {}).get("recent", [])[:10],
         "push": {"devices": len(state.pusher.endpoints),
                  "events_ok_at": state.events.ok_at if state.events else None,
@@ -956,6 +959,12 @@ def make_app(state: AppState):
             raise HTTPException(404, "not found")
         docs_call(lambda: state.docs.event(slug, event))
         state.system.log("doc", f"{'Checklist finished' if event == 'finish' else 'Doc sent to Claude'}: {slug}")
+        if event == "finish":                      # a checklist attached to a to-do item closes the item
+            tid = state.docs.todo_of(slug)
+            if tid:
+                _, changed = state.todos.close_from_checklist(tid, state.docs.result_phrase(slug))
+                if changed:
+                    state.system.log("todo", f"To-do closed by its checklist: {tid}")
         return {"ok": True}
 
     @app.post("/api/pc/docs/upload")
@@ -984,6 +993,102 @@ def make_app(state: AppState):
     def pc_docs_shot(req: Request, slug: str, file: str):
         need_pc(req)
         p = state.docs.shot_path(slug, file)
+        if not p:
+            raise HTTPException(404, "not found")
+        return FileResponse(p, media_type="image/jpeg")
+
+    # ------------------------------------------------------------ Filip's to-do list (stage 11d)
+    def todo_call(fn):
+        try:
+            return fn()
+        except LookupError:
+            raise HTTPException(404, "not found")
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/todos")
+    def todos_list(req: Request):
+        need_app(req)
+        return state.todos.view()
+
+    @app.get("/api/todos/{tid}")
+    def todos_get(req: Request, tid: str):
+        need_app(req)
+        return todo_call(lambda: state.todos.get(tid))
+
+    @app.post("/api/todos/{tid}/note")
+    def todos_note(req: Request, tid: str, d: dict = Body(default={})):
+        need_app(req)
+        todo_call(lambda: state.todos.set_note(tid, str(d.get("note", ""))))
+        return {"ok": True}
+
+    @app.post("/api/todos/{tid}/photo")
+    async def todos_photo(req: Request, tid: str):
+        need_app(req)
+        data = await req.body()
+        return {"file": todo_call(lambda: state.todos.add_photo(tid, data))}
+
+    @app.get("/api/todos/{tid}/photo/{file}")
+    def todos_photo_get(req: Request, tid: str, file: str):
+        need_app(req)
+        p = state.todos.photo_path(tid, file)
+        if not p:
+            raise HTTPException(404, "not found")
+        return FileResponse(p, media_type="image/jpeg")
+
+    @app.post("/api/todos/{tid}/result")
+    def todos_result(req: Request, tid: str, d: dict = Body(default={})):
+        need_app(req)
+        item, changed = todo_call(lambda: state.todos.result(tid, str(d.get("status", "")), d.get("note")))
+        if changed:
+            state.system.log("todo", f"To-do {item['status']}: {item['title'][:60]}")
+        return {"ok": True, "status": item["status"], "changed": changed}
+
+    @app.post("/api/todos/{tid}/reopen")
+    def todos_reopen(req: Request, tid: str):
+        need_app(req)
+        todo_call(lambda: state.todos.reopen(tid))
+        return {"ok": True}
+
+    @app.post("/api/pc/todos/upload")
+    def pc_todos_upload(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        cl = d.get("checklist") if isinstance(d.get("checklist"), dict) else None
+        if cl:
+            m = docs_call(lambda: state.docs.upload("checklist", str(cl.get("name", "")), str(cl.get("text", "")), todo=str(d.get("id", ""))))
+            d = dict(d, checklist=m["slug"])
+        else:
+            d = dict(d, checklist=None)
+        item, new = todo_call(lambda: state.todos.upload(d))
+        if new:
+            st = state.settings
+            if not st["muted"] and st["kinds"].get("claude", True):
+                state.deliver({"at": time.time(), "kind": "todo", "cat": "claude", "title": "New to-do for you", "body": item["title"],
+                               "group": f"todo:{item['id']}", "quiet": in_quiet(st, datetime.now()), "actions": [], "tab": 4})
+            state.system.log("todo", f"New to-do: {item['title'][:60]}")
+        return {"ok": True, "new": new}
+
+    @app.get("/api/pc/todos/changes")
+    def pc_todos_changes(req: Request):
+        need_pc(req)
+        return {"changes": state.todos.changes()}
+
+    @app.post("/api/pc/todos/ack")
+    def pc_todos_ack(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        state.todos.ack([str(k) for k in (d.get("ids") or [])][:50])
+        return {"ok": True}
+
+    @app.post("/api/pc/todos/delivery")
+    def pc_todos_delivery(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        state.todos.set_delivery(str(d.get("id", "")), str(d.get("state", "")), str(d.get("detail", "")))
+        return {"ok": True}
+
+    @app.get("/api/pc/todos/photo/{tid}/{file}")
+    def pc_todos_photo(req: Request, tid: str, file: str):
+        need_pc(req)
+        p = state.todos.photo_path(tid, file)
         if not p:
             raise HTTPException(404, "not found")
         return FileResponse(p, media_type="image/jpeg")
@@ -1036,7 +1141,7 @@ def make_app(state: AppState):
         lists = state.docs.summary()["checklists"]          # newest first
         cl = next((c for c in lists if not c.get("finished_at")), lists[0] if lists else None)
         return {"pc": {"online": bool(st.get("pc", {}).get("online")), "helper": time.time() - state.helper_at < HELPER_STALE},
-                "claude": {"working": working, "waiting": waiting}, "approvals": pend,
+                "claude": {"working": working, "waiting": waiting}, "approvals": pend, "todos": state.todos.open_count(),
                 "checklist": ({"title": cl["title"], "done": cl["done"], "total": cl["total"], "failed": cl["failed"],
                                                     "finished": bool(cl.get("finished_at"))} if cl else None),
                 "now": time.time()}

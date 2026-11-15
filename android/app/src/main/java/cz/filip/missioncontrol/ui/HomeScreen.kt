@@ -77,7 +77,7 @@ private fun netLabel(c: Context, reachable: Boolean): Pair<String, Boolean> {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifier = Modifier,
-               sleepAsk: Boolean = false, onSleepAsked: () -> Unit = {}) {
+               sleepAsk: Boolean = false, onSleepAsked: () -> Unit = {}, onOpenTodos: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<JSONObject?>(null) }
@@ -96,6 +96,7 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             // While one of our own taps is in flight the poll must not undo the instant change.
             if (inflight == 0 || force) {
                 data = d
+                d.optJSONObject("todos")?.let { TodoCount.open = it.optInt("open") }
                 val online = d.optJSONObject("pc")?.optBoolean("online") == true
                 val p = pcPending
                 if (p != null && ((p == "wake" && online) || (p == "sleep" && !online) || System.currentTimeMillis() - pcPendingAt > 90_000)) pcPending = null
@@ -191,6 +192,7 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                 PiTile(d.getJSONObject("pi"), Modifier.weight(1f))
             }
             WaitingCard(d.getJSONObject("claude"))
+            TodoCard(TodoCount.open, onOpenTodos)
             Recent(d.optJSONArray("recent"))
         }
     }
@@ -337,6 +339,20 @@ private fun PiTile(p: JSONObject, modifier: Modifier) {
             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
         Text(sub, color = Mc.Muted, fontSize = 14.sp, fontFamily = if (healthy) FontFamily.Monospace else FontFamily.Default,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun TodoCard(open: Int, onClick: () -> Unit) {
+    McCard(onClick = onClick) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Label("Your to-do list")
+                Text(if (open == 0) "Nothing open." else if (open == 1) "1 step waits for you." else "$open steps wait for you.",
+                    color = Mc.Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+            Text("$open", color = if (open > 0) Mc.Accent else Mc.Muted, fontSize = 34.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        }
     }
 }
 

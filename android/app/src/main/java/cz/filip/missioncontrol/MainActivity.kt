@@ -16,10 +16,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -56,6 +59,8 @@ import cz.filip.missioncontrol.ui.Mc
 import cz.filip.missioncontrol.ui.McTheme
 import cz.filip.missioncontrol.ui.SettingsScreen
 import cz.filip.missioncontrol.ui.SystemScreen
+import cz.filip.missioncontrol.ui.TodoCount
+import cz.filip.missioncontrol.ui.TodoScreen
 import cz.filip.missioncontrol.widget.McWidget
 
 private data class Tab(val title: String, val icon: ImageVector, val stage: Int)
@@ -65,7 +70,9 @@ private val tabs = listOf(
     Tab("Claude", Icons.Filled.Star, 4),
     Tab("Docs", Icons.Filled.List, 5),
     Tab("System", Icons.Filled.Settings, 6),
+    Tab("To-do", Icons.Filled.CheckCircle, 11),
 )
+private const val TODO_TAB = 4
 
 class MainActivity : FragmentActivity() {
     companion object {
@@ -137,7 +144,10 @@ private fun App(onLoggedIn: () -> Unit) {
                     NavigationBarItem(
                         selected = i == selected,
                         onClick = { selected = i },
-                        icon = { Icon(tab.icon, contentDescription = null) },
+                        icon = {
+                            if (i == TODO_TAB && TodoCount.open > 0) BadgedBox(badge = { Badge { Text("${TodoCount.open}") } }) { Icon(tab.icon, contentDescription = null) }
+                            else Icon(tab.icon, contentDescription = null)
+                        },
                         label = { Text(tab.title) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Mc.Accent, selectedTextColor = Mc.Accent,
@@ -159,10 +169,11 @@ private fun App(onLoggedIn: () -> Unit) {
             when {
                 !loggedIn -> LoginScreen(onDone = { loggedIn = true; onLoggedIn() }, modifier = m)
                 settings -> SettingsScreen(onBack = { settings = false }, onLoggedOut = logout, modifier = m)
-                selected == 0 -> HomeScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m,
+                selected == 0 -> HomeScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m, onOpenTodos = { selected = TODO_TAB },
                     sleepAsk = MainActivity.wantSleep.value, onSleepAsked = { MainActivity.wantSleep.value = false })
                 selected == 1 -> ClaudeScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m)
                 selected == 2 -> DocsScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m)
+                selected == TODO_TAB -> TodoScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m)
                 else -> SystemScreen(onSettings = { settings = true }, onLoggedOut = logout, modifier = m)
             }
         }

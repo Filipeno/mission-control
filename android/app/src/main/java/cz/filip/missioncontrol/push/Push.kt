@@ -51,7 +51,11 @@ object Notifs {
         val sid = m.optString("sid")
         val open = PendingIntent.getActivity(
             c, idFor(group) and 0xffff, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .apply { if (sid.isNotBlank()) putExtra(MainActivity.EXTRA_SESSION, sid) },
+                .apply {
+                    if (sid.isNotBlank()) putExtra(MainActivity.EXTRA_SESSION, sid)
+                    val tab = m.optInt("tab", -1)
+                    if (tab >= 0) putExtra(cz.filip.missioncontrol.widget.McWidget.EXTRA_TAB, tab)
+                },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val body = m.optString("body")

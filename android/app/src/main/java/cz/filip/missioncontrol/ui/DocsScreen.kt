@@ -186,6 +186,10 @@ private fun Progress(done: Int, total: Int) =
     LinearProgressIndicator(progress = { if (total == 0) 0f else done.toFloat() / total }, color = Mc.Accent, trackColor = Mc.ButtonDark,
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(8.dp).clip(RoundedCornerShape(4.dp)))
 
+/** A checklist or doc on its own screen (the to-do tab opens the checklist attached to an item with it). */
+@Composable
+fun DocDetailScreen(slug: String, onBack: () -> Unit, modifier: Modifier = Modifier) = DocDetail(slug, onBack, modifier)
+
 @Composable
 private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
     val ctx = LocalContext.current
@@ -226,7 +230,7 @@ private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
     }
 }
 
-private fun shrinkJpeg(ctx: Context, uri: Uri): ByteArray {
+internal fun shrinkJpeg(ctx: Context, uri: Uri): ByteArray {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     ctx.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, bounds) }
     var sample = 1
