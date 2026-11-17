@@ -10,8 +10,9 @@ The log has no tool input; the session title comes from the app's own session fi
 
 Commands (all print one JSON object):
   list                       pending cards with session titles
-  check <id> [--expect-title T] [--tool T]
+  check <id> [--expect-title T] [--tool T] [--since N] [--card-name NAME]
                              may this card be answered? {ok, reason, card}
+                             (--since/--card-name: the re-check right before the click)
   offset                     current end of main.log (bytes), for "wait" and "confirm"
   wait --from N [--tool T] [--timeout S]
                              first card emitted after byte offset N
@@ -73,8 +74,23 @@ def pending(cards):
     return [c for c in cards.values() if c["state"] == "pending"]
 
 
-def check(cards, request_id, titles, expect_title="", tool=""):
-    """Decide whether <request_id> may be clicked. Returns (ok, reason, card)."""
+# What the card itself says for a tool (UIA name of the card group, app 5.11492.5, seen live).
+# A tool not listed here is refused at the pre-click check until its card has been seen and added.
+CARD_PHRASE = {
+    "mcp__ccd_session__start_session": "Permission request: start the session",
+}
+
+
+def card_matches(tool, card_name):
+    phrase = CARD_PHRASE.get(tool)
+    return bool(phrase) and norm(card_name).startswith(phrase)
+
+
+def check(cards, request_id, titles, expect_title="", tool="", since_lines=None, card_name=None):
+    """Decide whether <request_id> may be clicked. Returns (ok, reason, card).
+    since_lines: log lines written since the button search began; any other card emitted for the
+    same session in them means the window may show a different card now.
+    card_name: the UIA name of the card that was found; it must fit the card's tool."""
     if not re.fullmatch(UUID, request_id or ""):
         return False, "bad request id", None
     c = cards.get(request_id)
@@ -89,12 +105,21 @@ def check(cards, request_id, titles, expect_title="", tool=""):
         return False, f"tool mismatch: card is {c['tool']}, expected {tool}", c
     if not c["title"]:
         return False, "session title unknown", c
+    dupes = [s for s, t in titles.items() if norm(t) == norm(c["title"])]
+    if len(dupes) > 1:
+        return False, f"title '{c['title']}' is used by {len(dupes)} sessions", c
     if expect_title and norm(expect_title) != norm(c["title"]):
         return False, f"title mismatch: session is '{c['title']}', expected '{expect_title}'", c
     # Question cards have no Allow/Deny buttons, so they cannot be confused with this one.
     same = [p for p in pending(cards) if p["session"] == c["session"] and p["tool"] not in QUESTION_TOOLS]
     if len(same) != 1:
         return False, f"{len(same)} cards pending in that session (need exactly 1)", c
+    if since_lines is not None:
+        newer = [n for n in parse(since_lines).values() if n["session"] == c["session"] and n["id"] != c["id"]]
+        if newer:
+            return False, f"{len(newer)} new card(s) in that session since the search began", c
+    if card_name is not None and not card_matches(c["tool"], card_name):
+        return False, f"card on screen '{norm(card_name)[:120]}' does not fit {c['tool']}", c
     return True, "", c
 
 
@@ -137,7 +162,9 @@ def titles_index():
             s = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if s.get("sessionId") and s.get("title"):
+        if s.get("isArchived"):
+            out.pop(s.get("sessionId"), None)            # archived: never answered here, not a title clash
+        elif s.get("sessionId") and s.get("title"):
             out[s["sessionId"]] = s["title"]
     return out
 
@@ -163,6 +190,8 @@ def main(argv=None):
     ap.add_argument("--expect-title", default="")
     ap.add_argument("--tool", default="")
     ap.add_argument("--from", dest="offset", type=int, default=0)
+    ap.add_argument("--since", type=int, default=-1, help="check: no other card for that session after this offset")
+    ap.add_argument("--card-name", default=None, help="check: UIA name of the card on screen; must fit the tool")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--log-dir", default=str(LOG_DIR))
     ap.add_argument("--titles", default="", help="JSON file {local_id: title} instead of the app's files (tests)")
@@ -177,7 +206,8 @@ def main(argv=None):
         return out({"ok": True, "cards": cards})
     if a.cmd == "check":
         t = titles if titles is not None else titles_index()
-        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, a.expect_title, a.tool)
+        since = new_lines(a.log_dir, a.since) if a.since >= 0 else None
+        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, a.expect_title, a.tool, since, a.card_name)
         return out({"ok": ok, "reason": reason, "card": c})
     if a.cmd == "wait":
         end = time.time() + a.timeout

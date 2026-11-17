@@ -126,6 +126,36 @@ class Check(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("question card", reason)
 
+    def test_duplicate_title_refused(self):
+        ok, reason, _ = m.check(self.cards(), A, {S1: "Same", S2: " Same "})
+        self.assertFalse(ok)
+        self.assertIn("used by 2 sessions", reason)
+
+    def test_recheck_ok(self):
+        ok, reason, _ = m.check(self.cards(), A, TITLES, since_lines=[emit(B, START, S2)],
+                                card_name="Permission request: start the session “MC card test (just says hi)”")
+        self.assertTrue(ok, reason)
+
+    def test_recheck_new_card_same_session_since_search(self):
+        # B came and went (answered) while the buttons were being searched: the window may show B's card.
+        lines = [emit(B, START, S1, "12:00:01"), resp(B, "deny", t="12:00:02")]
+        ok, reason, _ = m.check(self.cards(*lines), A, TITLES, since_lines=lines,
+                                card_name="Permission request: start the session “x”")
+        self.assertFalse(ok)
+        self.assertIn("new card(s) in that session", reason)
+
+    def test_recheck_card_text_must_fit_tool(self):
+        ok, reason, _ = m.check(self.cards(), A, TITLES, since_lines=[],
+                                card_name="Permission request: turn Remote Control off")
+        self.assertFalse(ok)
+        self.assertIn("does not fit", reason)
+
+    def test_recheck_unknown_tool_card_refused(self):
+        cards = m.parse([emit(C, "mcp__ccd_session_mgmt__set_remote_control", S2)])
+        ok, reason, _ = m.check(cards, C, TITLES, since_lines=[], card_name="Permission request: start the session “x”")
+        self.assertFalse(ok)
+        self.assertIn("does not fit", reason)
+
     def test_unknown_title_refused(self):
         ok, reason, _ = m.check(self.cards(), A, {})
         self.assertFalse(ok)
@@ -188,6 +218,18 @@ class Cli(unittest.TestCase):
         r = self.run_cli("confirm", C, "--from", str(off2), "--timeout", "1")
         self.assertTrue(r["ok"])
         self.assertEqual(r["decision"], "once")
+
+    def test_check_since_offset(self):
+        p = self.d / "main.log"                          # app start: the rotated log's card D is gone, C is alone in S2
+        p.write_text("2026-11-17 10:00:00 [info] Starting app {\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertTrue(self.run_cli("check", C)["ok"])
+        off = self.run_cli("offset")["offset"]
+        with open(self.d / "main.log", "a", encoding="utf-8") as f:
+            f.write(emit("eeeeeeee-0000-4000-8000-000000000005", START, S2, "12:05:00") + "\n")
+            f.write(resp("eeeeeeee-0000-4000-8000-000000000005", "once", t="12:05:01") + "\n")
+        r = self.run_cli("check", C, "--since", str(off), "--card-name", "Permission request: start the session “x”")
+        self.assertFalse(r["ok"])
+        self.assertIn("new card(s)", r["reason"])
 
     def test_confirm_times_out(self):
         off = self.run_cli("offset")["offset"]
