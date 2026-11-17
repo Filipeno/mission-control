@@ -238,7 +238,7 @@ private fun PiTile(pi: JSONObject?, modifier: Modifier) {
         Text(if (t != null) "${t.toInt()} °C" else "—", color = if (pi.optBoolean("healthy")) Mc.Text else Mc.Bad, fontSize = 28.sp,
             fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 4.dp))
         val free = pi.optDouble("disk_free_gb").takeIf { !it.isNaN() }?.let { "${it.toInt()} GB free" }
-        val up = pi.optLong("uptime_s").takeIf { it > 0 }?.let { "up ${duration(it)}" }
+        val up = pi.optLong("uptime_s").takeIf { it > 0 }?.let { "up ${duration(it)}" }
         Text(listOfNotNull(free, up).joinToString(" · "), color = Mc.Muted, fontSize = 14.sp)
         pi.optInt("mem_used_pct", -1).takeIf { it >= 0 }?.let { Text("RAM $it%", color = Mc.Muted, fontSize = 14.sp) }
     }
@@ -257,7 +257,7 @@ private fun MiniTile(m: JSONObject?, modifier: Modifier) {
             fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
         val temp = m.optDouble("temp").takeIf { !it.isNaN() }?.let { "${it.toInt()} °C" }
         val disk = m.optDouble("disk_pct").takeIf { !it.isNaN() }?.let { "disk ${it.toInt()}%" }
-        val up = m.optLong("uptime").takeIf { it > 0 }?.let { "up ${duration(it)}" }
+        val up = m.optLong("uptime").takeIf { it > 0 }?.let { "up ${duration(it)}" }
         val line = listOfNotNull(temp, disk, up).joinToString(" · ")
         Text(if (line.isNotBlank()) line else if (ok) "Home Assistant answers" else "", color = Mc.Muted, fontSize = 14.sp)
     }

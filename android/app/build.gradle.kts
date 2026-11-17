@@ -23,8 +23,8 @@ android {
         applicationId = "cz.filip.missioncontrol"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.12.0"
+        versionCode = 19
+        versionName = "0.12.1"
         // -PpublicBuild (tools/release.ps1): no addresses inside the APK, because it is published on GitHub.
         val publicBuild = project.hasProperty("publicBuild")
         buildConfigField("String", "PI_URL", "\"${if (publicBuild) "" else mcLocal.getProperty("mc.piUrl", "")}\"")
@@ -49,6 +49,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.icons.core)
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.glance.appwidget)
     debugImplementation(libs.compose.ui.tooling)
 }

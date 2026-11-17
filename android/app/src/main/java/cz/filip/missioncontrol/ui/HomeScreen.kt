@@ -329,7 +329,7 @@ private fun PiTile(p: JSONObject, modifier: Modifier) {
     val healthy = p.optBoolean("healthy")
     val down = p.optJSONArray("down")
     val temp = p.optDouble("temp_c").takeIf { !it.isNaN() }?.let { "${it.toInt()} °C" }
-    val up = p.optLong("uptime_s").takeIf { it > 0 }?.let { "up ${duration(it)}" }
+    val up = p.optLong("uptime_s").takeIf { it > 0 }?.let { "up ${duration(it)}" }
     val sub = if (!healthy && down != null && down.length() > 0)
         "Down: " + (0 until down.length()).joinToString(", ") { down.getString(it) }
     else listOfNotNull(temp, up).joinToString(" · ")

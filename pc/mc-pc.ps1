@@ -613,6 +613,21 @@ function Write-MailboxFile($sid, $name, $body) {
     $final
 }
 
+function Sync-Crashes {
+    # App crash reports saved on the Pi -> D:\ai-hub\files\mc-crashes\<name>.txt; the Pi copy is deleted only after the file is written.
+    $c = Api 'Get' '/api/pc/crashes'
+    $got = @()
+    foreach ($x in @($c.crashes)) {
+        if (-not $x -or "$($x.name)" -notmatch '^[0-9]{8}-[0-9]{6}-[0-9]+\.txt$') { continue }
+        $dir = "$Hub\files\mc-crashes"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        [IO.File]::WriteAllText("$dir\$($x.name)", "$($x.text)", $utf8)
+        $got += "$($x.name)"
+        Write-Log "app crash report saved: $($x.name)"
+    }
+    if ($got.Count) { Api 'Post' '/api/pc/crashes/ack' @{ names = $got } | Out-Null }
+}
+
 function Sync-Todos {
     $open = "$Hub\todo\open"; $doneDir = "$Hub\todo\done"
     New-Item -ItemType Directory -Force $open, $doneDir | Out-Null
@@ -788,6 +803,7 @@ while ($true) {
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }
             try { Sync-Todos } catch { Write-Log "todo sync: $($_.Exception.Message)" }
+            try { Sync-Crashes } catch { Write-Log "crash sync: $($_.Exception.Message)" }
             try { Process-Mailboxes } catch { Write-Log "mailbox: $($_.Exception.Message)" }
             $nextReport = (Get-Date).AddSeconds(15)
         }

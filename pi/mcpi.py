@@ -1061,6 +1061,40 @@ def make_app(state: AppState):
                     state.system.log("todo", f"To-do closed by its checklist: {tid}")
         return {"ok": True}
 
+    # Crash reports from the phone (see CrashLog.kt): saved here, then mc-pc fetches them into the hub (files/mc-crashes) and acks.
+    def crash_dir() -> Path:
+        d = STATE / "crashes"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @app.post("/api/app/crash")
+    def app_crash(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        text = str(d.get("text", ""))[:100_000]
+        if not text.strip():
+            raise HTTPException(400, "empty")
+        stamp = re.sub(r"[^0-9]", "", str(d.get("name", "")))[-13:] or str(int(time.time() * 1000))
+        files = sorted(crash_dir().glob("*.txt"))
+        for old in files[:-199]:      # at most 200 kept
+            old.unlink(missing_ok=True)
+        (crash_dir() / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{stamp}.txt").write_text(text, encoding="utf-8")
+        state.system.log("crash", "App crash report received")
+        return {"ok": True}
+
+    @app.get("/api/pc/crashes")
+    def pc_crashes(req: Request):
+        need_pc(req)
+        return {"crashes": [{"name": f.name, "text": f.read_text(encoding="utf-8", errors="replace")}
+                            for f in sorted(crash_dir().glob("*.txt"))[:20]]}
+
+    @app.post("/api/pc/crashes/ack")
+    def pc_crashes_ack(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        for n in d.get("names") or []:
+            if re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9]+\.txt", str(n)):
+                (crash_dir() / str(n)).unlink(missing_ok=True)
+        return {"ok": True}
+
     @app.post("/api/pc/docs/upload")
     def pc_docs_upload(req: Request, d: dict = Body(default={})):
         need_pc(req)

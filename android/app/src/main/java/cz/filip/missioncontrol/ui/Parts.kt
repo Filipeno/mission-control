@@ -60,9 +60,9 @@ fun clock(unixS: Double): String {
 }
 
 fun duration(s: Long): String = when {
-    s < 3600 -> "${s / 60} min"
-    s < 86400 -> "${s / 3600} h"
-    else -> "${s / 86400} d"
+    s < 3600 -> "${s / 60} min"
+    s < 86400 -> "${s / 3600} h"
+    else -> "${s / 86400} d"
 }
 
 /** Material "power settings new" icon (not in material-icons-core). */
