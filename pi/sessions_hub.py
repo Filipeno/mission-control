@@ -53,6 +53,8 @@ class SessionsHub:
     def on_snapshot(self, d: dict) -> None:
         sessions = [_clean_session(s) for s in (d.get("sessions") or [])[:60] if isinstance(s, dict)]
         gates = [_clean_gate(g) for g in (d.get("gates") or [])[:20] if isinstance(g, dict) and GID_RE.match(str(g.get("id", "")))]
+        ids = [g["id"] for g in gates]
+        gates = [g for g in gates if ids.count(g["id"]) == 1]      # a duplicated id is never shown or answered
         props = [_clean_prop(p) for p in (d.get("proposals") or [])[:30] if isinstance(p, dict) and KEY_RE.match(str(p.get("key", "")))]
         titles = {s["id"]: s["title"] for s in sessions}
         notify = []

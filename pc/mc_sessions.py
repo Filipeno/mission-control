@@ -244,6 +244,8 @@ def gates() -> list:
             g = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{4}", str(g.get("id", ""))):
+            continue                                         # only the hook's own ids; "ac-..." is reserved for app cards
         if process_name(g.get("pid", 0)) not in ("python.exe", "pythonw.exe", "py.exe"):
             try:
                 f.unlink()                                   # the hook is gone (answered at the PC)

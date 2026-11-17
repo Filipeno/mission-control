@@ -26,10 +26,16 @@ TITLES = {S1: "Boss chat", S2: "Other chat"}
 
 
 class BuildGates(unittest.TestCase):
+    def test_two_open_tool_uses_is_not_found(self):
+        blocks = [{"name": START, "input": {"title": "a"}}, {"name": START, "input": {"title": "b"}}]
+        out = g.build_gates([card(A)], TITLES, SESSIONS, lambda s: blocks)
+        self.assertFalse(out[0]["input_found"])
+        self.assertFalse(out[0]["answerable"])
+        self.assertEqual(out[0]["input"], {})
+
     def test_full_brief_from_transcript(self):
         brief = "x" * 20000
         blocks = {SID1: [{"name": "Bash", "input": {"command": "ls"}},
-                         {"name": START, "input": {"title": "old", "prompt": "older"}},
                          {"name": START, "input": {"title": "New one", "prompt": brief}}]}
         out = g.build_gates([card(A)], TITLES, SESSIONS, lambda sid: blocks.get(sid, []))
         self.assertEqual(len(out), 1)

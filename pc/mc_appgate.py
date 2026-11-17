@@ -44,12 +44,13 @@ def card_epoch(at: str) -> float:
 
 
 def find_input(open_blocks: list, tool: str):
-    """The newest still-open tool_use of this tool in the transcript: (input, found)."""
-    for b in reversed(open_blocks or []):
-        if isinstance(b, dict) and b.get("name") == tool:
-            inp = b.get("input")
-            return (inp if isinstance(inp, dict) else {}), True
-    return {}, False
+    """The open tool_use of this tool in the transcript: (input, found). Found only when exactly ONE is open:
+    with two the card could belong to either, so nothing is shown as "the request" (and the card is not answerable)."""
+    mine = [b for b in (open_blocks or []) if isinstance(b, dict) and b.get("name") == tool]
+    if len(mine) != 1:
+        return {}, False
+    inp = mine[0].get("input")
+    return (inp if isinstance(inp, dict) else {}), True
 
 
 def fit_input(inp: dict):
@@ -81,7 +82,7 @@ def build_gates(cards: list, titles: dict, sessions: list, open_blocks_of) -> li
             "id": gate_id(c["id"]), "kind": "appcard", "card": c["id"], "tool": c["tool"], "input": inp,
             "input_found": found, "truncated": truncated, "session_id": s.get("id", ""), "local": c["session"],
             "card_title": titles.get(c["session"], ""), "cwd": s.get("cwd", ""), "created": card_epoch(c.get("at", "")),
-            "answerable": c["tool"] in mc_appcard.CARD_PHRASE,
+            "answerable": c["tool"] in mc_appcard.CARD_PHRASE and found,
         })
     return out
 
