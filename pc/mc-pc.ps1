@@ -52,12 +52,12 @@ function Get-ClaudeAppProcesses { @(Get-Process Claude -ErrorAction SilentlyCont
 
 function Get-HealthReport([switch]$WithHelpers) {
     $out = @{}
-    if ($WithHelpers) { try {
+    try {
         $watch = "$Hub\state\claude-app-watchdog.json"; $w = ReadJson $watch
         $out.claude = @{ running = [bool](Get-ClaudeAppProcesses); down_since = if ($w) { "$($w.downSince)" } else { $null }; last_ok = if ($w) { "$($w.lastOk)" } else { $null }; watchdog_at = if (Test-Path -LiteralPath $watch) { Unix (Get-Item -LiteralPath $watch).LastWriteTime } else { $null } }
     } catch { $out.claude = $null }
     try { $s = ReadJson "$Hub\state\selftest.json"; $out.selftest = if ($s) { @{ at = "$($s.at)"; failed = @($s.failed); results = $s.results } } else { $null } } catch { $out.selftest = $null }
-    try {
+    if ($WithHelpers) { try {
         $usage = Join-Path $Hub 'bin\usage.ps1'; $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
         $u = (& $shell -NoProfile -File $usage -Json 2>$null | Out-String) | ConvertFrom-Json; $cw = @($u.codex.windows)[0]
         $out.helpers = @{ gemini_app = $u.gemini_app; perplexity = $u.perplexity; codex = @{ used_percent = if ($cw) { $cw.used_percent } else { $null }; resets_epoch = if ($cw) { $cw.resets_epoch } else { $null }; plan = "$($u.codex.plan)" }; parked = @($u.parked); health = $u.helper_health }
