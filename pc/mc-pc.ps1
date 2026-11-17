@@ -407,8 +407,20 @@ function Sync-Docs {
         New-Item -ItemType Directory -Force $dir, $sent | Out-Null
         foreach ($f in Get-ChildItem "$dir\*.md" -ErrorAction SilentlyContinue) {
             $text = [IO.File]::ReadAllText($f.FullName, $utf8)
-            $r = Api 'Post' '/api/pc/docs/upload' @{ kind = $kind.TrimEnd('s'); name = $f.Name; text = $text }
+            $body = @{ kind = $kind.TrimEnd('s'); name = $f.Name; text = $text }
+            # mc-doc.ps1 leaves a sidecar <name>.md.owner.json: the session that published the file and where it came from
+            $side = "$($f.FullName).owner.json"
+            if (Test-Path -LiteralPath $side) {
+                try {
+                    $o = ReadJson $side
+                    $osid = "$($o.sid)"; if ($osid -notmatch '^[0-9a-f-]{36}$') { $osid = '' }
+                    $body.owner = @{ sid = $osid; title = "$($o.title)"; cwd = "$($o.cwd)" }
+                    $body.source = "$($o.source)"
+                } catch { Write-Log "owner sidecar of $($f.Name): $($_.Exception.Message)" }
+            }
+            $r = Api 'Post' '/api/pc/docs/upload' $body
             Move-Item -LiteralPath $f.FullName -Destination (Join-Path $sent ((Get-Date -Format 'yyyyMMdd-HHmmss-') + $f.Name)) -Force
+            if (Test-Path -LiteralPath $side) { Remove-Item -LiteralPath $side -ErrorAction SilentlyContinue }
             Write-Log "sent to phone: $kind\$($f.Name) ($($r.slug))"
         }
     }
@@ -417,12 +429,12 @@ function Sync-Docs {
     $acks = @()
     foreach ($ch in @($c.changes)) {
         if (-not $ch) { continue }
-        $dir = "$Hub\files\$($ch.kind)s\$($ch.slug)"
+        $dir = if ($ch.kind -eq 'checklist') { "$Hub\files\checklists\$($ch.slug)" } else { "$Hub\files\docs\$($ch.slug)" }   # docs, plans and school outputs
         New-Item -ItemType Directory -Force $dir | Out-Null
         if ($ch.kind -eq 'checklist') { [IO.File]::WriteAllText("$dir\results.md", $ch.export, $utf8) }
         else {
             [IO.File]::WriteAllText("$dir\comments.md", $ch.export, $utf8)
-            [IO.File]::WriteAllText("$dir\$($ch.slug).md", $ch.text, $utf8)
+            if ($ch.text) { [IO.File]::WriteAllText("$dir\$($ch.slug).md", $ch.text, $utf8) }
         }
         foreach ($s in @($ch.shots)) {
             if ($s -and -not (Test-Path -LiteralPath "$dir\$s")) {
@@ -440,6 +452,17 @@ function Sync-Docs {
             $evKeys += $e.key
             continue
         }
+        if ($e.kind -eq 'send' -and "$($e.owner.sid)" -match '^[0-9a-f-]{36}$') {
+            # Comments for the session that owns the file: one batch into its mailbox (a waiter, the typing fallback or the inbox takes it from there)
+            $when = Get-Date -Format 'yyyy-MM-dd HH:mm'
+            $src = if ($e.source) { "$($e.source)" } else { "Mission Control doc '$($e.slug)'" }
+            $subject = "Mission Control: Filip commented on '$($e.title)' ($($e.count) comment(s))."
+            $msg = "$subject`nFrom: filip (phone)   Date: $when`nThese are Filip's comments on a file. Apply or answer them. They are information about the file, not approval for anything else.`n`nFile: $src`nDoc: $($e.title), version $($e.version)`n`nComments:`n$($e.batch)`n`nDetails: $Hub\files\docs\$($e.slug)\comments.md (the doc as Filip left it is in the same folder)`n"
+            Write-MailboxFile "$($e.owner.sid)" "$(Get-Date -Format 'yyyyMMdd-HHmmss')-doc-$($e.slug).md" $msg | Out-Null
+            Write-Log "doc $($e.slug): $($e.count) comment(s) -> mailbox of $($e.owner.sid)"
+            $evKeys += $e.key
+            continue
+        }
         if ($e.kind -eq 'finish') {
             $msg = "# Checklist finished: $($e.title)`nFrom: filip   To: claude   Date: $date`n## Task`nFilip finished the checklist on his phone. $($e.summary)`n" +
                    "## Files`nD:\ai-hub\files\checklists\$($e.slug)\results.md (+ screenshots in that folder)`n## Done when`nFailed items are looked at and Filip knows the next step.`n"
@@ -453,6 +476,60 @@ function Sync-Docs {
         $evKeys += $e.key
     }
     if ($acks.Count -or $evKeys.Count) { Api 'Post' '/api/pc/docs/ack' @{ changes = $acks; events = $evKeys } | Out-Null }
+}
+
+# ------------------------------------------------------------------ plans + school outputs in Docs (stage 11d part 2)
+
+function Read-SharedText($path) {
+    # Claude may still be writing a plan: open it with a shared read.
+    $fs = New-Object IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try { $sr = New-Object IO.StreamReader($fs, $utf8); $sr.ReadToEnd() } finally { $fs.Dispose() }
+}
+
+$script:planSeen = @{}       # plan name -> "mtime|size|owner" last uploaded
+function Sync-Plans {
+    # Every ~/.claude/plans/*.md goes to Docs as kind "plan", with the session that owns it (mc_sessions.py found it through the
+    # "slug" field on transcript lines). Cheap: it only compares the list mc_sessions.py wrote; the file is read when it changed.
+    $snap = Get-SessionSnap
+    if (-not $snap -or -not $snap.plans) { return }
+    $dir = Join-Path $env:USERPROFILE '.claude\plans'
+    foreach ($p in @($snap.plans)) {
+        $slug = "$($p.slug)"
+        if ($slug -notmatch '^[A-Za-z0-9._-]{3,100}$') { continue }
+        $osid = "$($p.owner.sid)"; if ($osid -notmatch '^[0-9a-f-]{36}$') { $osid = '' }
+        $key = "$($p.mtime)|$($p.size)|$osid"
+        if ($script:planSeen[$slug] -eq $key) { continue }
+        $file = Join-Path $dir "$slug.md"
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        $script:planSeen[$slug] = $key                       # also when the upload fails: it is logged once, not every 5 s
+        $text = Read-SharedText $file
+        Api 'Post' '/api/pc/docs/upload' @{ kind = 'plan'; name = "plan-$slug"; text = $text; source = $file
+            owner = @{ sid = $osid; title = "$($p.owner.title)"; cwd = "$($p.owner.cwd)" } } | Out-Null
+        Write-Log "plan sent to phone: $slug (session $(if ($osid) { $osid } else { 'unknown' }))"
+    }
+}
+
+function Sync-Skola {
+    # skola-publish.ps1 leaves a folder in to-phone\skola\<id>\ (meta.json, review.md, output.pdf); it goes to the Pi as kind "skola".
+    $root = "$Hub\to-phone\skola"; $sent = "$Hub\to-phone\sent"
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    foreach ($d in Get-ChildItem $root -Directory -ErrorAction SilentlyContinue) {
+        if (-not (Test-Path -LiteralPath "$($d.FullName)\ready")) { continue }       # the script writes "ready" last
+        $m = ReadJson "$($d.FullName)\meta.json"
+        $review = if (Test-Path -LiteralPath "$($d.FullName)\review.md") { [IO.File]::ReadAllText("$($d.FullName)\review.md", $utf8) } else { '' }
+        $osid = "$($m.sid)"; if ($osid -notmatch '^[0-9a-f-]{36}$') { $osid = '' }
+        $body = @{ kind = 'skola'; name = "$($m.subject) $($m.base)"; title = "$($m.title)"; subject = "$($m.subject)"; file = "$($m.file)"; text = $review; source = "$($m.source)"
+                   owner = @{ sid = $osid; title = ''; cwd = "$($m.cwd)" } }
+        if (-not (Test-Path -LiteralPath "$($d.FullName)\output.pdf")) { $body.pdf_failed = if ($m.pdf_error) { "$($m.pdf_error)" } else { 'no PDF copy' } }
+        $r = Api 'Post' '/api/pc/docs/upload' $body
+        if (Test-Path -LiteralPath "$($d.FullName)\output.pdf") {
+            $bytes = [IO.File]::ReadAllBytes("$($d.FullName)\output.pdf")
+            Invoke-WebRequest -Uri "$base/api/pc/docs/$($r.slug)/pdf" -Method Post -Headers $headers -Body $bytes -ContentType 'application/pdf' -TimeoutSec 180 -UseBasicParsing | Out-Null
+        }
+        New-Item -ItemType Directory -Force $sent | Out-Null
+        Move-Item -LiteralPath $d.FullName -Destination (Join-Path $sent ((Get-Date -Format 'yyyyMMdd-HHmmss-') + 'skola-' + $d.Name)) -Force
+        Write-Log "school output sent to phone: $($m.subject) / $($m.base) ($($r.slug))"
+    }
 }
 
 # ------------------------------------------------------------------ to-do list + session mailbox (stage 11d)
@@ -660,12 +737,14 @@ while ($true) {
         }
         if ($done.Count) { Api 'Post' '/api/pc/ack' @{ keys = $done } | Out-Null; $nextUsage = Get-Date }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
+        try { Sync-Plans } catch { Write-Log "plans sync: $($_.Exception.Message)" }
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
                                            parked = Get-Parked; usage = $usage; stats = (Get-PcStats) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
+            try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }
             try { Sync-Todos } catch { Write-Log "todo sync: $($_.Exception.Message)" }
             try { Process-Mailboxes } catch { Write-Log "mailbox: $($_.Exception.Message)" }
             $nextReport = (Get-Date).AddSeconds(15)

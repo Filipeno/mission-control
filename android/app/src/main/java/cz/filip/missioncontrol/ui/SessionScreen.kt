@@ -495,14 +495,14 @@ private fun DiffBox(old: String, new: String) {
 }
 
 @Composable
-private fun PrimaryButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) =
+internal fun PrimaryButton(text: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) =
     Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(14.dp), modifier = modifier.height(50.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C))) {
         Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
 
 @Composable
-private fun DarkBtn(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, onClick: () -> Unit) =
+internal fun DarkBtn(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, onClick: () -> Unit) =
     OutlinedButton(onClick = onClick, modifier = modifier.height(50.dp), shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.outlinedButtonColors(containerColor = Mc.ButtonDark, contentColor = color), border = BorderStroke(1.dp, Mc.Border)) {
         Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -511,6 +511,7 @@ private fun DarkBtn(text: String, modifier: Modifier = Modifier, color: Color = 
 /** A phone-gate request: a question (options + own text) or a permission (exact input, Allow / Deny). */
 @Composable
 private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payload: String, label: String) -> Unit) {
+    val ctx = LocalContext.current
     val inp = g.optJSONObject("input") ?: JSONObject()
     val kind = g.optString("kind")
     val tool = g.optString("tool")
@@ -557,7 +558,12 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
             return@McCard
         }
         Label(if (kind == "plan") "Plan · approve to start" else "Wants to run · $tool", Mc.Warn)
+        val planDoc = if (kind == "plan") g.optString("doc") else ""
         when {
+            kind == "plan" && inp.optString("plan").isBlank() -> Text(
+                if (planDoc.isNotBlank()) "Claude's plan is ready. Open it to read it, comment on lines and approve or reject it."
+                else "Claude's plan is ready, but this phone cannot find the plan file. Read it at the PC.", color = Mc.Text, fontSize = 15.sp,
+                modifier = Modifier.padding(top = 6.dp))
             tool == "Bash" || tool == "PowerShell" -> {
                 CodeBox(inp.optString("command"))
                 inp.optString("description").takeIf { it.isNotBlank() }?.let { Text(it, color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
@@ -575,21 +581,50 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
         if (g.optBoolean("truncated")) Text("Too long to show fully here: check it at the PC before allowing.", color = Mc.Warn, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         var note by remember { mutableStateOf<String?>(null) }
+        var askComments by remember { mutableStateOf(false) }
+        val openComments = g.optInt("doc_open_comments")
+        if (planDoc.isNotBlank() && !busy) {
+            PrimaryButton(if (openComments > 0) "Open plan · $openComments comment${if (openComments > 1) "s" else ""}" else "Open plan to review", Modifier.fillMaxWidth()) {
+                cz.filip.missioncontrol.MainActivity.wantDoc.value = planDoc; cz.filip.missioncontrol.MainActivity.wantTab.intValue = 2
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         if (busy) Text("Waiting for fingerprint…", color = Mc.Muted, fontSize = 14.sp)
         else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton("Allow", Modifier.weight(1.5f)) { send("allow", "", "Allow $tool") }
-                DarkBtn("Deny", Modifier.weight(1f), Mc.Bad) { send("deny", "", "Deny $tool") }
+                if (kind == "plan") {
+                    DarkBtn("Approve", Modifier.weight(1.5f)) { if (openComments > 0) askComments = true else send("allow", "", "Approve plan") }
+                    DarkBtn("Reject", Modifier.weight(1f), Mc.Bad) {
+                        if (openComments > 0 && planDoc.isNotBlank()) {      // the comments are the feedback: reject in the plan, where they are listed
+                            Toast.makeText(ctx, "Reject it in the plan: your comments go with it", Toast.LENGTH_LONG).show()
+                            cz.filip.missioncontrol.MainActivity.wantDoc.value = planDoc; cz.filip.missioncontrol.MainActivity.wantTab.intValue = 2
+                        } else note = ""
+                    }
+                } else {
+                    PrimaryButton("Allow", Modifier.weight(1.5f)) { send("allow", "", "Allow $tool") }
+                    DarkBtn("Deny", Modifier.weight(1f), Mc.Bad) { send("deny", "", "Deny $tool") }
+                }
             }
-            Text("Deny and tell Claude why…", color = Mc.Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            if (kind != "plan") Text("Deny and tell Claude why…", color = Mc.Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { note = "" }.padding(vertical = 10.dp, horizontal = 4.dp))
         }
         note?.let { n ->
-            AlertDialog(onDismissRequest = { note = null }, containerColor = Mc.Card, title = { Text("Deny with a note") },
+            AlertDialog(onDismissRequest = { note = null }, containerColor = Mc.Card, title = { Text(if (kind == "plan") "Reject the plan" else "Deny with a note") },
                 text = { OutlinedTextField(value = n, onValueChange = { note = it }, minLines = 3, modifier = Modifier.fillMaxWidth()) },
-                confirmButton = { TextButton(enabled = n.isNotBlank(), onClick = { note = null; send("deny", n.trim(), "Deny $tool") }) { Text("Send") } },
+                confirmButton = { TextButton(enabled = n.isNotBlank(), onClick = { note = null; send("deny", n.trim(), if (kind == "plan") "Reject plan" else "Deny $tool") }) { Text("Send") } },
                 dismissButton = { TextButton(onClick = { note = null }) { Text("Cancel") } })
         }
+        if (askComments) AlertDialog(onDismissRequest = { askComments = false }, containerColor = Mc.Card,
+            title = { Text("Send the comments as changes instead?") },
+            text = { Text("This plan has $openComments open comment${if (openComments > 1) "s" else ""}. Approving takes the plan as it is. Open the plan to reject it with the comments as the changes.") },
+            confirmButton = { TextButton(onClick = {
+                askComments = false
+                cz.filip.missioncontrol.MainActivity.wantDoc.value = planDoc; cz.filip.missioncontrol.MainActivity.wantTab.intValue = 2
+            }) { Text("Open the plan") } },
+            dismissButton = { Row {
+                TextButton(onClick = { askComments = false; send("allow", "", "Approve plan") }) { Text("Approve anyway") }
+                TextButton(onClick = { askComments = false }) { Text("Cancel") }
+            } })
     }
 }
 

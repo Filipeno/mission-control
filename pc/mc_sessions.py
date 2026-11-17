@@ -5,11 +5,13 @@ Prints one JSON object to stdout:
   gates     open requests of the phone-gate hook (D:\\ai-hub\\gate\\pending), exact tool input included
   proposals "start a new session" cards a session proposed and nobody has started or withdrawn yet
   watch     (with --watch <sessionId>) the last activity rows of that one session
+  plans     every ~/.claude/plans/*.md with the session that owns it (stage 11d part 2); sessions carry plan_slugs
 Everything is read-only. Transcripts are read on the PC; only short rows go to the Pi.
 """
 import argparse
 import ctypes
 import json
+import mmap
 import os
 import re
 import sys
@@ -26,6 +28,8 @@ TAIL_WATCH = 6 * 1024 * 1024    # bytes read for the open session (tool results 
 MAX_LINE = 256 * 1024           # longer transcript lines (pictures, big tool output) are skipped unparsed
 MAX_ROWS = 80
 PROPOSAL_DAYS = 7
+PLANS = HOME / ".claude" / "plans"
+PLAN_SEARCH_BUDGET_S = 4.0      # time per run for finding the owner of a plan whose session has ended
 START_TOOL = "mcp__ccd_session__start_session"
 DISMISS_TOOL = "mcp__ccd_session__dismiss_task"
 
@@ -263,6 +267,121 @@ def gates() -> list:
     return out
 
 
+def plan_doc_slug(plan_slug: str) -> str:
+    """The Docs slug mc-pi gives a plan (same rule as docs_hub.slugify on the name "plan-<slug>")."""
+    return re.sub(r"[^a-z0-9]+", "-", ("plan-" + plan_slug).lower()).strip("-")[:60]
+
+
+def slugs_in(entries: list) -> list:
+    """Plan names ("slug" on transcript lines) in order of first appearance of their last use; the current one is last."""
+    seen = []
+    for e in entries:
+        sl = e.get("slug")
+        if isinstance(sl, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{2,80}", sl):
+            if sl in seen:
+                seen.remove(sl)
+            seen.append(sl)
+    return seen[-6:]
+
+
+def head_info(path: Path) -> dict:
+    """Folder and a title for an ended session, from the start of its transcript."""
+    cwd, title, first = "", "", ""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(400 * 1024)
+    except OSError:
+        return {"title": "", "cwd": ""}
+    for line in data.split(b"\n")[:400]:
+        if not line.strip() or len(line) > MAX_LINE:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not cwd and isinstance(e.get("cwd"), str):
+            cwd = e["cwd"]
+        if e.get("type") == "custom-title" and e.get("customTitle"):
+            title = str(e["customTitle"])
+        if not first and e.get("type") == "user" and not e.get("isMeta"):
+            t = text_of((e.get("message") or {}).get("content")).strip()
+            if t and not t.startswith("<"):
+                first = t
+    return {"title": cut(title or first or "Ended session", 100), "cwd": cwd}
+
+
+def transcripts_newest_first() -> list:
+    out = []
+    for p in PROJECTS.glob("*/*.jsonl"):
+        try:
+            out.append((p.stat().st_mtime, p))
+        except OSError:
+            pass
+    out.sort(key=lambda x: -x[0])
+    return out
+
+
+def search_plan_owner(slug: str, born: float, entry: dict, deadline: float) -> None:
+    """Looks for "slug":"<slug>" in transcripts (newest first) and records the session in [entry]. Resumable: checked files are remembered."""
+    needle = b'"slug":"' + slug.encode() + b'"'
+    checked = entry.setdefault("checked", {})
+    for mtime, p in transcripts_newest_first():
+        if mtime < born - 86400:
+            break                                            # older than the plan: it cannot be the owner
+        key = str(p)
+        if checked.get(key) == int(mtime):
+            continue
+        if time.time() > deadline:
+            return                                           # out of time: continue next run
+        hit = False
+        try:
+            if p.stat().st_size:
+                with open(p, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                    hit = m.find(needle) >= 0
+        except (OSError, ValueError):
+            pass
+        if hit:
+            info = head_info(p)
+            entry.update(found=True, sid=p.stem, title=info["title"], cwd=info["cwd"], at=time.time())
+            entry["checked"] = {}
+            return
+        checked[key] = int(mtime)
+    entry.update(found=False, at=time.time())                # whole search done: ask again in 10 min
+
+
+def plan_list(live: list, cache: dict) -> list:
+    """Every plan file with the session that owns it: a live session that uses the name, else a cached transcript search."""
+    out = []
+    files = []
+    try:
+        for p in PLANS.glob("*.md"):
+            st = p.stat()
+            files.append((st.st_mtime, p, st))
+    except OSError:
+        return out
+    files.sort(key=lambda x: -x[0])
+    deadline = time.time() + PLAN_SEARCH_BUDGET_S
+    for mtime, p, st in files[:60]:
+        slug = p.stem
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,100}", slug) or st.st_size > 280_000:
+            continue
+        owner = None
+        cands = [s for s in live if slug in s["plan_slugs"]]
+        if cands:
+            cands.sort(key=lambda s: (s["plan_slugs"][-1] == slug, s["updated"]), reverse=True)
+            s = cands[0]
+            owner = {"sid": s["id"], "title": s["title"], "cwd": s["cwd"]}
+        else:
+            c = cache.setdefault(slug, {})
+            if not c.get("found") and (not c.get("at") or time.time() - c["at"] > 600 or c.get("checked")):
+                born = getattr(st, "st_birthtime", None) or st.st_ctime
+                search_plan_owner(slug, born, c, deadline)
+            if c.get("found"):
+                owner = {"sid": c["sid"], "title": c.get("title", ""), "cwd": c.get("cwd", "")}
+        out.append({"slug": slug, "doc": plan_doc_slug(slug), "mtime": st.st_mtime, "size": st.st_size, "owner": owner})
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--watch", default="")
@@ -301,7 +420,8 @@ def main():
             title0 = s.get("name") if s.get("nameSource") != "derived" and s.get("name") else (cut(first_user, 80) or s.get("name") or "Claude")
             d = {"title": cut(title0, 100), "pending": pending, "last": cut(last["text"], 160) if last else "",
                  "last_role": last["role"] if last else "", "rows_at": rows[-1]["at"] if rows else 0,
-                 "proposals": proposals_from(entries, sid, cut(title0, 100), s.get("cwd") or "")}
+                 "proposals": proposals_from(entries, sid, cut(title0, 100), s.get("cwd") or ""),
+                 "plan_slugs": slugs_in(entries)}
             if sid == a.watch:
                 result["watch"] = {"id": sid, "rows": rows[-MAX_ROWS:]}
         new_cache[sid] = {"stamp": stamp, "data": d}
@@ -314,12 +434,37 @@ def main():
             "rc": bool(s.get("bridgeSessionId")), "rc_id": s.get("bridgeSessionId") or "",
             "updated": max((s.get("statusUpdatedAt") or s.get("updatedAt") or 0) / 1000, d["rows_at"]),
             "last": d["last"], "last_role": d["last_role"], "pending": d["pending"] if waiting else None,
+            "plan_slugs": d.get("plan_slugs") or [],
         })
         result["proposals"] += d["proposals"]
     try:
         cache_path.write_text(json.dumps(new_cache), encoding="utf-8")
     except OSError:
         pass
+    plan_cache_path = Path(os.environ.get("TEMP") or ".") / "mc-plans-cache.json"
+    try:
+        plan_cache = json.loads(plan_cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        plan_cache = {}
+    try:
+        result["plans"] = plan_list(result["sessions"], plan_cache)
+        plan_cache_path.write_text(json.dumps(plan_cache), encoding="utf-8")
+    except Exception:                                        # plans are a bonus: never break the session list
+        result["plans"] = []
+    for g in result["gates"]:                                # a plan request points at its Doc
+        if g.get("kind") != "plan":
+            continue
+        inp = g.get("input") if isinstance(g.get("input"), dict) else {}
+        sl = Path(str(inp.get("planFilePath") or "")).stem if inp.get("planFilePath") else ""
+        if not sl:
+            ss = next((x for x in result["sessions"] if x["id"] == g.get("session_id")), None)
+            sl = (ss or {}).get("plan_slugs", [""])[-1] if ss and ss.get("plan_slugs") else ""
+        if sl:
+            g["doc"] = plan_doc_slug(sl)
+        else:                                                # no slug on the lines and no planFilePath: the newest plan this session owns
+            mine = [p for p in result["plans"] if (p.get("owner") or {}).get("sid") == g.get("session_id")]
+            if mine:
+                g["doc"] = max(mine, key=lambda p: p["mtime"])["doc"]
     if a.watch and "watch" not in result:
         result["watch"] = {"id": a.watch, "rows": [], "gone": True}
     data = json.dumps(result, ensure_ascii=False).encode("utf-8")

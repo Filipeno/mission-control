@@ -80,12 +80,16 @@ class MainActivity : FragmentActivity() {
         val wantTab = mutableIntStateOf(-1)
         val wantSleep = mutableStateOf(false)
         const val EXTRA_SESSION = "mc_session"
+        const val EXTRA_DOC = "mc_doc"
+        /** Set by a notification tap or a plan card: open this doc in the Docs tab. */
+        val wantDoc = mutableStateOf("")
         /** Set by a notification tap: open this Claude session. */
         val wantSession = mutableStateOf("")
     }
 
     private fun readIntent(i: android.content.Intent?) {
         i?.getStringExtra(EXTRA_SESSION)?.takeIf { it.isNotBlank() }?.let { wantSession.value = it; wantTab.intValue = 1; i.removeExtra(EXTRA_SESSION) }
+        i?.getStringExtra(EXTRA_DOC)?.takeIf { it.isNotBlank() }?.let { wantDoc.value = it; wantTab.intValue = 2; i.removeExtra(EXTRA_DOC) }
         val t = i?.getIntExtra(McWidget.EXTRA_TAB, -1) ?: -1
         if (t >= 0) { wantTab.intValue = t; i?.removeExtra(McWidget.EXTRA_TAB) }
         if (i?.getBooleanExtra(McWidget.EXTRA_SLEEP, false) == true) { wantSleep.value = true; i.removeExtra(McWidget.EXTRA_SLEEP) }

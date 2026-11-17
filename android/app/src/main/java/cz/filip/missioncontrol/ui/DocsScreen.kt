@@ -18,6 +18,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -114,11 +115,19 @@ fun DocsScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
     var list by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    var resumed by remember { mutableStateOf(false) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { resumed = true; onPauseOrDispose { resumed = false } }
 
-    LaunchedEffect(reload, open) {
+    // A notification tap or a plan card opened a doc: show it.
+    val wantDoc = cz.filip.missioncontrol.MainActivity.wantDoc.value
+    LaunchedEffect(wantDoc) { if (wantDoc.isNotBlank()) { open = wantDoc; cz.filip.missioncontrol.MainActivity.wantDoc.value = "" } }
+    LaunchedEffect(reload, open, resumed) {
         if (open != null) return@LaunchedEffect
-        try { list = withContext(Dispatchers.IO) { Api.get(ctx, "/api/docs") }; error = null }
-        catch (e: ApiError) { if (e.code == 401) onLoggedOut() else error = e.message }
+        while (resumed) {      // plans waiting for approval appear without a tap
+            try { list = withContext(Dispatchers.IO) { Api.get(ctx, "/api/docs") }; error = null }
+            catch (e: ApiError) { if (e.code == 401) onLoggedOut() else error = e.message }
+            delay(8000)
+        }
     }
     BackHandler(enabled = open != null) { open = null; reload++ }
 
@@ -136,10 +145,12 @@ fun DocsScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             IconButton(onClick = onSettings, modifier = Modifier.padding(bottom = 2.dp)) { Icon(Icons.Filled.Settings, "Settings", tint = Mc.Muted) }
         }
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).border(1.dp, Mc.Border, RoundedCornerShape(16.dp)).background(Mc.Card).padding(5.dp)) {
-            listOf("Checklists", "Docs").forEachIndexed { i, t ->
+            val waitingPlans = list?.optJSONArray("plans").objs().count { it.optBoolean("waiting") }
+            listOf("Lists", "Docs", if (waitingPlans > 0) "Plans · $waitingPlans" else "Plans", "School").forEachIndexed { i, t ->
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(if (tab == i) Mc.ButtonDark else Color.Transparent)
                     .clickable { tab = i }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    Text(t, color = if (tab == i) Mc.Text else Mc.Muted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(t, color = if (tab == i) Mc.Text else if (i == 2 && waitingPlans > 0) Mc.Warn else Mc.Muted, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
         }
@@ -161,23 +172,62 @@ fun DocsScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                     Progress(c.optInt("done"), c.optInt("total"))
                 }
             }
-        } else {
+        } else if (tab == 1) {
             val docs = l.optJSONArray("docs").objs()
-            if (docs.isEmpty()) Text("No docs yet. Claude sends them through D:\\ai-hub\\to-phone\\docs.", color = Mc.Muted, fontSize = 14.sp)
-            docs.forEachIndexed { i, d ->
-                Row(Modifier.fillMaxWidth().clickable { open = d.getString("slug") }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.List, null, tint = Mc.Text, modifier = Modifier.size(26.dp))
-                    Spacer(Modifier.width(16.dp))
-                    Column {
-                        Text(d.optString("title"), color = Mc.Text, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        val oc = d.optInt("open_comments")
-                        Text(if (oc > 0) "$oc open comment${if (oc > 1) "s" else ""}" else "Edited by ${d.optString("by")} · ${ago(d.optDouble("updated"))}",
-                            color = Mc.Muted, fontSize = 14.sp)
+            if (docs.isEmpty()) Text("No docs yet. Claude sends them with mc-doc.ps1 or through D:\\ai-hub\\to-phone\\docs.", color = Mc.Muted, fontSize = 14.sp)
+            DocRows(docs) { open = it }
+        } else if (tab == 2) {
+            val plans = l.optJSONArray("plans").objs()
+            if (plans.isEmpty()) Text("No plans yet. Every plan Claude writes in plan mode shows up here.", color = Mc.Muted, fontSize = 14.sp)
+            plans.forEach { p ->
+                McCard(onClick = { open = p.getString("slug") }, modifier = if (p.optBoolean("waiting")) Modifier.border(1.dp, Color(0xFF5A4115), RoundedCornerShape(18.dp)) else Modifier) {
+                    if (p.optBoolean("waiting")) Label("Waiting for your decision", Mc.Warn)
+                    Text(p.optString("title"), color = Mc.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp))
+                    OwnerLine(p.optJSONObject("owner"))
+                    val oc = p.optInt("open_comments")
+                    Text((if (oc > 0) "$oc open comment${if (oc > 1) "s" else ""} · " else "") + "updated ${ago(p.optDouble("updated"))}", color = Mc.Muted, fontSize = 13.sp)
+                }
+            }
+        } else {
+            val items = l.optJSONArray("skola").objs()
+            if (items.isEmpty()) Text("No school outputs yet. After skola-kontrola, Claude publishes them here as a PDF with the review.", color = Mc.Muted, fontSize = 14.sp)
+            items.groupBy { it.optString("subject") }.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (subject, rows) ->
+                Label(subject, Mc.Accent)
+                McCard {
+                    rows.forEachIndexed { i, d ->
+                        Column(Modifier.fillMaxWidth().clickable { open = d.getString("slug") }.padding(vertical = 10.dp)) {
+                            Text(d.optString("title"), color = Mc.Text, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            val oc = d.optInt("open_comments")
+                            val note = when {
+                                !d.optBoolean("pdf") && d.optString("pdf_failed").isNotBlank() -> "PDF failed (${d.optString("file")}): ${d.optString("pdf_failed")}"
+                                oc > 0 -> "$oc open comment${if (oc > 1) "s" else ""}"
+                                else -> "PDF + review · ${ago(d.optDouble("updated"))}"
+                            }
+                            Text(note, color = if (d.optString("pdf_failed").isNotBlank() && !d.optBoolean("pdf")) Mc.Warn else Mc.Muted, fontSize = 13.sp)
+                        }
+                        if (i < rows.size - 1) HorizontalDivider(color = Mc.Border)
                     }
                 }
-                if (i < docs.size - 1) HorizontalDivider(color = Mc.Border)
             }
         }
+    }
+}
+
+@Composable
+private fun DocRows(docs: List<JSONObject>, onOpen: (String) -> Unit) {
+    docs.forEachIndexed { i, d ->
+        Row(Modifier.fillMaxWidth().clickable { onOpen(d.getString("slug")) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.List, null, tint = Mc.Text, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(d.optString("title"), color = Mc.Text, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val oc = d.optInt("open_comments")
+                Text(if (oc > 0) "$oc open comment${if (oc > 1) "s" else ""}" else "Edited by ${d.optString("by")} · ${ago(d.optDouble("updated"))}",
+                    color = Mc.Muted, fontSize = 14.sp)
+            }
+        }
+        if (i < docs.size - 1) HorizontalDivider(color = Mc.Border)
     }
 }
 
@@ -197,11 +247,20 @@ private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
     var d by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var tick by remember { mutableIntStateOf(0) }
+    var pdf by remember { mutableStateOf(false) }
     LaunchedEffect(tick) {
         try { d = withContext(Dispatchers.IO) { Api.get(ctx, "/api/docs/$slug") }; error = null } catch (e: ApiError) { error = e.message }
     }
     val lock = remember { kotlinx.coroutines.sync.Mutex() }     // calls go to the Pi in tap order
     var pending by remember { mutableIntStateOf(0) }
+    // A plan waits for his decision: keep the bar right (answered at the PC first = it disappears).
+    val kind = d?.optString("kind")
+    LaunchedEffect(slug, kind) {
+        while (kind == "plan") {
+            delay(4000)
+            if (pending == 0) runCatching { d = withContext(Dispatchers.IO) { Api.get(ctx, "/api/docs/$slug") } }
+        }
+    }
     /** Edits the doc on screen at once ([patch] runs on a copy), then tells the Pi; the real doc is re-read when the queue is empty or a call failed. */
     fun post(path: String, body: JSONObject = JSONObject(), ok: String? = null, patch: ((JSONObject) -> Unit)? = null): kotlinx.coroutines.Job {
         ok?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
@@ -217,6 +276,7 @@ private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
         }
     }
 
+    if (pdf) { PdfViewer(slug, d?.optString("title").orEmpty(), onBack = { pdf = false }); return }
     Column(modifier.fillMaxSize().imePadding()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp, top = 12.dp, end = 16.dp)) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Mc.Text) }
@@ -226,7 +286,7 @@ private fun DocDetail(slug: String, onBack: () -> Unit, modifier: Modifier) {
         error?.let { Text(it, color = Mc.Bad, modifier = Modifier.padding(16.dp)) }
         val doc = d ?: return@Column
         if (doc.optString("kind") == "checklist") Checklist(slug, doc, ::post) { tick++ }
-        else DocText(slug, doc, ::post)
+        else DocText(slug, doc, ::post, onPdf = { pdf = true }, onChanged = { tick++ })
     }
 }
 
@@ -410,21 +470,45 @@ private fun CommentsDialog(list: List<JSONObject>, onDismiss: () -> Unit, onAdd:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, String?, ((JSONObject) -> Unit)?) -> kotlinx.coroutines.Job) {
+private fun ColumnScope.DocText(slug: String, doc: JSONObject, post: (String, JSONObject, String?, ((JSONObject) -> Unit)?) -> kotlinx.coroutines.Job,
+                    onPdf: () -> Unit, onChanged: () -> Unit) {
+    val ctx = LocalContext.current
+    val kind = doc.optString("kind")
     val text = doc.optString("text")
     val lines = text.lines()
     val comments = doc.optJSONArray("comments").objs()
+    val owner = doc.optJSONObject("owner")
+    val unsent = doc.optInt("unsent")
     var editing by remember { mutableStateOf(false) }
     var draft by remember(text) { mutableStateOf(text) }
     var lineFor by remember { mutableStateOf<Int?>(null) }
+    var starting by remember { mutableStateOf(false) }
 
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
+        OwnerLine(owner)
+        if (kind == "skola" && !doc.optBoolean("has_pdf") && doc.optString("pdf_failed").isNotBlank())
+            Text("PDF failed (${doc.optString("file")}): ${doc.optString("pdf_failed")}. The review is below.", color = Mc.Warn, fontSize = 13.sp)
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
         if (editing) {
             SmallButton("Save") { post("/text", JSONObject().put("text", draft), "Saved") { dd -> dd.put("text", draft) }; editing = false }
             SmallButton("Cancel") { draft = text; editing = false }
         } else {
-            SmallButton("Edit") { editing = true }
-            SmallButton("Send to Claude") { post("/send", JSONObject(), "Sent to Claude", null) }
+            if (kind == "skola" && doc.optBoolean("has_pdf")) SmallButton("Open PDF", onPdf)
+            if (kind == "doc") SmallButton("Edit") { editing = true }
+            if (kind == "plan" && doc.optJSONObject("gate") != null) { /* his decision goes through Approve / Reject below; the comments travel with a reject */ }
+            else if (ownerReachable(owner)) {
+                val who = owner?.optString("title").orEmpty().take(22)
+                SmallButton(if (unsent > 0) "Send $unsent to $who" else "Send to session") {
+                    if (unsent == 0 && !doc.optBoolean("edited")) Toast.makeText(ctx, "Long-press a line to add a comment first", Toast.LENGTH_SHORT).show()
+                    else post("/send", JSONObject(), "Sent to the session: it gets all your new comments as one message") { dd ->
+                        dd.put("unsent", 0).put("edited", false)
+                        dd.optJSONArray("comments")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.takeIf { c -> !c.optBoolean("resolved") && c.optDouble("sent", 0.0) == 0.0 }?.put("sent", System.currentTimeMillis() / 1000.0) }
+                    }
+                }
+            } else SmallButton(if (unsent > 0) "Start a session ($unsent)" else "Start a session") {
+                if (unsent == 0) Toast.makeText(ctx, "Long-press a line to add a comment first", Toast.LENGTH_SHORT).show() else starting = true
+            }
         }
     }
     if (editing) {
@@ -432,8 +516,9 @@ private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, St
             modifier = Modifier.fillMaxSize().padding(16.dp))
         return
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text("Long-press a line to comment on it.", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Long-press a line to comment on it." + if (kind == "plan") " Comments go to Claude when you reject the plan." else "", color = Mc.Muted, fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 8.dp))
         lines.forEachIndexed { i, l ->
             val h = Regex("^(#{1,6})\\s+(.*)").find(l)
             val shown = h?.groupValues?.get(2) ?: l.replace(Regex("^\\s*[-*] "), "•  ").replace("**", "")
@@ -442,14 +527,17 @@ private fun DocText(slug: String, doc: JSONObject, post: (String, JSONObject, St
                 fontWeight = if (h != null) FontWeight.SemiBold else FontWeight.Normal,
                 modifier = Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { lineFor = i }).padding(vertical = 2.dp))
             comments.filter { it.optInt("line", -1) == i && !it.optBoolean("resolved") }.forEach { c ->
-                Text("💬 ${c.optString("text")}", color = Mc.Warn, fontSize = 13.sp,
+                val sent = c.optDouble("sent", 0.0) > 0
+                Text("💬 ${c.optString("text")}" + if (sent) "  · sent" else "", color = if (sent) Mc.Muted else Mc.Warn, fontSize = 13.sp,
                     modifier = Modifier.padding(start = 12.dp, bottom = 4.dp).clickable { lineFor = i })
             }
         }
     }
+    if (kind == "plan") PlanBar(slug, doc, onChanged = onChanged)
     lineFor?.let { i ->
         CommentsDialog(comments.filter { it.optInt("line", -1) == i }, onDismiss = { lineFor = null }, title = "Line ${i + 1}",
-            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("line", i), null) { dd -> addComment(dd, JSONObject().put("text", t).put("line", i)) } },
+            onAdd = { t -> post("/comment", JSONObject().put("text", t).put("line", i), null) { dd -> addComment(dd, JSONObject().put("text", t).put("line", i)); dd.put("unsent", dd.optInt("unsent") + 1) } },
             onResolve = { c -> post("/comment/$c/resolve", JSONObject(), null) { dd -> resolveComment(dd, c) } })
     }
+    if (starting) StartSessionDialog(slug, doc) { started -> starting = false; if (started) onChanged() }
 }

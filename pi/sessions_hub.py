@@ -9,6 +9,7 @@ Signed strings:
   message        "msg|<sessionId>|<text>|<ts>"
   start proposal "start|<key>|<ts>"
   gate settings  "gate-config|<auto>|<enabled 0/1>|<ts>"
+  doc start      "docstart|<doc slug>|<ts>"   (types a request into the boss session, which starts a session for a doc)
 """
 import json
 import re
@@ -22,6 +23,9 @@ KEY_RE = re.compile(r"^(task_[0-9a-f]{6,}|offer-[A-Za-z0-9_-]{4,20})$")
 WATCH_TTL = 30          # mc-pc sends activity of the open session while the phone asked within this time
 FRESH = 30              # a snapshot older than this = PC helper not reporting
 AUTO = ("none", "readonly")
+# The boss session: the main Claude Desktop session of Filip's AI team. A side session (one a boss started for a
+# single job) runs in a project folder, so only a session whose folder is exactly one of these counts.
+BOSS_DIRS = ("d:\\projekty", "d:\\ai-hub")
 
 
 class SessionsHub:
@@ -70,6 +74,8 @@ class SessionsHub:
                 if x["kind"] == "question":
                     qs = (x.get("input") or {}).get("questions") or [{}]
                     title, body = f"{x['session']} asks", str(qs[0].get("question") or "a question")[:200]
+                elif x["kind"] == "plan":
+                    title, body = f"{x['session']}: plan ready", "Tap to read the plan, comment and approve or reject it."
                 else:
                     title, body = f"{x['session']} needs permission", x["summary"][:200]
             else:
@@ -79,6 +85,8 @@ class SessionsHub:
                   "sid": x.get("session_id", "")}
             if kind == "gate":
                 ev.update(gate=x["id"], gkind=x["kind"], summary=x["summary"][:200])
+                if x["kind"] == "plan" and x.get("doc"):
+                    ev.update(doc=x["doc"], tab=2, sid="")          # the tap opens the plan in the Docs tab
             self.deliver(ev)
 
     def on_result(self, d: dict) -> None:
@@ -139,7 +147,7 @@ class SessionsHub:
                     raise ValueError("bad answers")
                 item["answers"] = {str(k)[:500]: str(v)[:2000] for k, v in list(answers.items())[:8]}
             else:
-                item["text"] = payload[:2000]
+                item["text"] = payload[:6000]              # a rejected plan carries Filip's line comments
             self.results[item["key"]] = {"ok": None, "detail": "sent to the PC", "at": time.time(),
                                          "sid": g.get("session_id"), "text": decision, "kind": "gate"}
             self._trim_results()
@@ -183,6 +191,39 @@ class SessionsHub:
             self.save("gate-config.json", self.config)
         self.claude.enqueue({"key": secrets.token_hex(8), "kind": "gate-config", "auto": auto, "enabled": enabled, "at": time.time()})
         return dict(self.config)
+
+    def sessions_snapshot(self) -> tuple:
+        """(live sessions, snapshot is fresh)"""
+        with self.lock:
+            return list(self.snap["sessions"]), time.time() - self.snap["at"] < FRESH
+
+    def gate_for_doc(self, doc: str):
+        """The open plan request that belongs to this plan Doc, if any."""
+        with self.lock:
+            g = next((x for x in self.snap["gates"] if x.get("kind") == "plan" and x.get("doc") == doc), None)
+            return {"id": g["id"], "session_id": g.get("session_id", ""), "session": g.get("session", ""), "created": g.get("created", 0)} if g else None
+
+    def gate_docs(self) -> set:
+        with self.lock:
+            return {g["doc"] for g in self.snap["gates"] if g.get("kind") == "plan" and g.get("doc")}
+
+    def boss_session(self):
+        """The most recently active main Desktop session in D:\\projekty or D:\\ai-hub (see BOSS_DIRS), or None."""
+        with self.lock:
+            if time.time() - self.snap["at"] >= FRESH:
+                return None
+            c = [x for x in self.snap["sessions"] if x["kind"] == "desktop" and x["local"] and x["cwd"].lower().rstrip("\\/") in BOSS_DIRS]
+            return max(c, key=lambda x: x["updated"], default=None)
+
+    def start_from_doc(self, token_hash: str, slug: str, text: str, d: dict) -> dict:
+        """Types a request into the boss session: it starts a session for this doc (Filip's answer 6)."""
+        self._verify(token_hash, f"docstart|{slug}", d)
+        b = self.boss_session()
+        if not b:
+            raise LookupError("No main Claude Desktop session is open in D:\\projekty or D:\\ai-hub (or the PC is not reporting). Open one and try again.")
+        r = self._type(b["id"], text, "start")
+        r["boss"] = b["title"]
+        return r
 
     # ------------------------------------------------------------ helpers
 
@@ -228,11 +269,11 @@ def _clean_gate(g: dict) -> dict:
     return {"id": g["id"], "kind": _s(g.get("kind"), 12), "tool": _s(g.get("tool"), 80), "input": inp if len(raw) <= 40000 else {},
             "truncated": bool(g.get("truncated")) or len(raw) > 40000, "session_id": _s(g.get("session_id"), 40),
             "cwd": _s(g.get("cwd"), 200), "agent": _s(g.get("agent"), 60), "created": float(g.get("created") or 0),
-            "summary": _summary(_s(g.get("tool"), 80), inp)}
+            "doc": _s(g.get("doc"), 70), "summary": _summary(_s(g.get("tool"), 80), inp)}
 
 
 def _gate_brief(g: dict) -> dict:
-    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created") if k in g}
+    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created", "doc") if k in g}
 
 
 def _summary(tool: str, inp: dict) -> str:

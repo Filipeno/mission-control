@@ -53,6 +53,7 @@ object Notifs {
             c, idFor(group) and 0xffff, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .apply {
                     if (sid.isNotBlank()) putExtra(MainActivity.EXTRA_SESSION, sid)
+                    m.optString("doc").takeIf { it.isNotBlank() }?.let { putExtra(MainActivity.EXTRA_DOC, it) }
                     val tab = m.optInt("tab", -1)
                     if (tab >= 0) putExtra(cz.filip.missioncontrol.widget.McWidget.EXTRA_TAB, tab)
                 },
@@ -80,7 +81,7 @@ object Notifs {
             b.addAction(android.app.Notification.Action.Builder(null, a.optString("label"), pi).build())
         }
         // A permission request: Allow / Deny right in the notification (fingerprint, strong face or PIN asked first).
-        if (m.optString("kind") == "claude-gate" && m.optString("gkind") != "question" && m.optString("gate").isNotBlank()) {
+        if (m.optString("kind") == "claude-gate" && m.optString("gkind") !in setOf("question", "plan") && m.optString("gate").isNotBlank()) {
             for ((i, d) in listOf("allow" to "Allow", "deny" to "Deny").withIndex()) {
                 val pi = PendingIntent.getActivity(c, (idFor(group) and 0xfff) * 8 + 4 + i,
                     Intent(c, GateAnswerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_HISTORY)

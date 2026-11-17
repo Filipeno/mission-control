@@ -18,6 +18,7 @@ import base64
 import hashlib
 import hmac
 import json
+import ntpath
 import os
 import re
 import secrets
@@ -796,17 +797,27 @@ def make_app(state: AppState):
         state.sessions.on_result(d)
         return {"ok": True}
 
+    def with_plan_info(gates):
+        """A plan request carries how many open comments its Doc has (the card asks before approving over them)."""
+        for g in gates:
+            if g.get("kind") == "plan" and g.get("doc"):
+                g["doc_open_comments"] = state.docs.open_comment_count(g["doc"])
+        return gates
+
     @app.get("/api/sessions")
     def sessions_list(req: Request):
         need_app(req)
         v = state.sessions.list_view()
+        with_plan_info(v["gates"])
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
         return v
 
     @app.get("/api/sessions/{sid}")
     def session_one(req: Request, sid: str):
         need_app(req)
-        return sess_call(lambda: state.sessions.session_view(sid))
+        v = sess_call(lambda: state.sessions.session_view(sid))
+        with_plan_info(v["gates"])
+        return v
 
     @app.post("/api/sessions/{sid}/message")
     def session_message(req: Request, sid: str, d: dict = Body(default={})):
@@ -906,15 +917,75 @@ def make_app(state: AppState):
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
 
+    def inside(session_cwd: str, folder: str) -> bool:
+        a, b = session_cwd.lower().rstrip("/" + chr(92)), folder.lower().rstrip("/" + chr(92))
+        return bool(a) and (b == a or b.startswith(a + chr(92)) or b.startswith(a + "/"))
+
+    def owner_view(meta: dict) -> dict:
+        """Who owns a doc and whether that session is running: from the session that published it, else the
+        newest live session whose folder contains the file (the deepest folder first), else nobody."""
+        o = meta.get("owner") or {}
+        sessions, fresh = state.sessions.sessions_snapshot()
+        sid = o.get("sid") or ""
+        if sid:
+            s = next((x for x in sessions if x["id"] == sid), None)
+            if s:
+                return {"sid": sid, "title": s["title"], "cwd": s["cwd"], "state": "running", "busy": s["state"], "kind": s["kind"]}
+            return {"sid": sid, "title": o.get("title") or "A Claude session", "cwd": o.get("cwd", ""),
+                    "state": "ended" if fresh else "unknown", "busy": "", "kind": ""}
+        folder = ntpath.dirname(meta.get("source") or "") or o.get("cwd") or ""
+        if folder and fresh:
+            c = [x for x in sessions if inside(x["cwd"], folder)]
+            if c:
+                s = max(c, key=lambda x: (len(x["cwd"]), x["updated"]))
+                return {"sid": s["id"], "title": s["title"], "cwd": s["cwd"], "state": "running", "busy": s["state"], "kind": s["kind"],
+                        "by_folder": True}
+        return {"sid": "", "title": "", "cwd": folder, "state": "none", "busy": "", "kind": ""}
+
     @app.get("/api/docs")
     def docs_list(req: Request):
         need_app(req)
-        return state.docs.summary()
+        return state.docs.summary(owner_view, state.sessions.gate_docs())
 
     @app.get("/api/docs/{slug}")
     def docs_get(req: Request, slug: str):
         need_app(req)
-        return docs_call(lambda: state.docs.get(slug))
+        return docs_call(lambda: state.docs.get(slug, owner_view, state.sessions.gate_for_doc(slug)))
+
+    @app.get("/api/docs/{slug}/pdf")
+    def docs_pdf(req: Request, slug: str):
+        need_app(req)
+        p = state.docs.pdf_path(slug)
+        if not p:
+            raise HTTPException(404, "no PDF")
+        return FileResponse(p, media_type="application/pdf")
+
+    @app.post("/api/docs/{slug}/sent")
+    def docs_sent(req: Request, slug: str, d: dict = Body(default={})):
+        """Comments that went to Claude another way (a rejected plan carries them as feedback)."""
+        need_app(req)
+        n = docs_call(lambda: state.docs.mark_sent(slug, {str(i) for i in (d.get("ids") or [])[:200]}))
+        return {"ok": True, "marked": n}
+
+    @app.post("/api/docs/{slug}/start-session")
+    def docs_start_session(req: Request, slug: str, d: dict = Body(default={})):
+        """No session owns this doc: type a request into the boss session, which starts one. Signed (fingerprint)."""
+        need_app(req)
+        m = docs_call(lambda: state.docs.get(slug, owner_view))
+        batch, ids = state.docs.batch(slug)
+        if not batch:
+            raise HTTPException(400, "There are no new comments to hand over.")
+        o = m.get("owner") or {}
+        folder = str(d.get("folder") or "")[:200] or o.get("cwd") or ntpath.dirname(m.get("source") or "") or "D:" + chr(92) + "projekty"
+        src = m.get("source") or ""
+        text = (f'Mission Control: Filip commented on "{m["title"]}" on his phone and no Claude session owns it. Please start a session for it with '
+                f"start_session (folder: {folder}) and this brief: apply or answer his comments"
+                + (f" on {src}" if src else "") + f", then tell him it started. (Sent from Mission Control on my phone.)\n\nComments:\n{batch}\n"
+                + f"(Also in D:{chr(92)}ai-hub{chr(92)}files{chr(92)}docs{chr(92)}{slug}{chr(92)}comments.md)")[:3900]
+        r = sess_call(lambda: state.sessions.start_from_doc(_hash_token(bearer(req)), slug, text, d))
+        state.docs.mark_sent(slug, set(ids))
+        state.system.log("doc", f"Doc handed to the boss session: {slug}")
+        return {"ok": True, "boss": r.get("boss", ""), "folder": folder}
 
     @app.post("/api/docs/{slug}/item/{item_id}")
     def docs_item(req: Request, slug: str, item_id: int, d: dict = Body(default={})):
@@ -957,8 +1028,13 @@ def make_app(state: AppState):
         need_app(req)
         if event not in ("finish", "send"):
             raise HTTPException(404, "not found")
-        docs_call(lambda: state.docs.event(slug, event))
-        state.system.log("doc", f"{'Checklist finished' if event == 'finish' else 'Doc sent to Claude'}: {slug}")
+        owner = None
+        if event == "send":
+            owner = owner_view(docs_call(lambda: state.docs.meta(slug)))
+            if owner["state"] == "none":
+                raise HTTPException(409, "No Claude session owns this doc. Use Start a session instead.")
+        docs_call(lambda: state.docs.event(slug, event, owner))
+        state.system.log("doc", f"{'Checklist finished' if event == 'finish' else 'Comments sent to a session'}: {slug}")
         if event == "finish":                      # a checklist attached to a to-do item closes the item
             tid = state.docs.todo_of(slug)
             if tid:
@@ -970,12 +1046,30 @@ def make_app(state: AppState):
     @app.post("/api/pc/docs/upload")
     def pc_docs_upload(req: Request, d: dict = Body(default={})):
         need_pc(req)
-        m = docs_call(lambda: state.docs.upload(str(d.get("kind")), str(d.get("name", "")), str(d.get("text", ""))))
-        if m.get("updated", 0) > time.time() - 5:
-            state.deliver({"at": time.time(), "kind": "doc", "cat": "claude",
-                           "title": "New checklist" if m["kind"] == "checklist" else "New doc from Claude",
-                           "body": m["title"], "group": f"doc:{m['slug']}", "quiet": False, "actions": []})
+        m = docs_call(lambda: state.docs.upload(str(d.get("kind")), str(d.get("name", "")), str(d.get("text", "")), owner=d.get("owner"),
+                                                 source=str(d.get("source") or ""), subject=str(d.get("subject") or ""), title=str(d.get("title") or ""),
+                                                 pdf_failed=str(d.get("pdf_failed") or ""), file=str(d.get("file") or "")))
+        if m.get("updated", 0) > time.time() - 5 and m["kind"] != "plan":      # a plan announces itself when Claude asks to approve it
+            st = state.settings
+            if not st["muted"] and st["kinds"].get("claude", True):
+                title = {"checklist": "New checklist", "skola": "New school output"}.get(m["kind"], "New doc from Claude")
+                body = (m.get("subject", "") + ": " if m["kind"] == "skola" and m.get("subject") else "") + m["title"]
+                state.deliver({"at": time.time(), "kind": "doc", "cat": "claude", "title": title, "body": body,
+                               "group": f"doc:{m['slug']}", "quiet": in_quiet(st, datetime.now()), "actions": [], "tab": 2})
         return {"ok": True, "slug": m["slug"]}
+
+    @app.post("/api/pc/docs/{slug}/pdf")
+    async def pc_docs_pdf(req: Request, slug: str):
+        need_pc(req)
+        data = await req.body()
+        docs_call(lambda: state.docs.save_pdf(slug, data))
+        return {"ok": True}
+
+    @app.post("/api/pc/docs/{slug}/delete")
+    def pc_docs_delete(req: Request, slug: str):
+        need_pc(req)
+        docs_call(lambda: state.docs.delete(slug))
+        return {"ok": True}
 
     @app.get("/api/pc/docs/changes")
     def pc_docs_changes(req: Request):
