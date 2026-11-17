@@ -39,6 +39,7 @@ from docs_hub import DocsHub
 from todo_hub import TodoHub
 from system_hub import SystemHub
 from health_hub import HealthHub
+from ai_hub import AiHub
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("MC_PI_ENV", HERE / "mc-pi.env"))
@@ -69,6 +70,7 @@ SETTINGS_DEFAULTS = {
     "kinds": {"claude": True, "sleep": True, "room": True, "system": True},
     "wake_on_approve": False,   # wake the PC when Filip answers an approval
     "ideas_audio": False,       # ideas: send audio instead of speech-to-text
+    "digest_on": True, "digest_time": "20:00",   # the evening digest of the day (quiet hours still apply)
 }
 KIND_CAT = {"waiting": "claude", "error": "claude", "done": "claude", "stuck": "claude",
             "sleep": "sleep", "room": "room"}
@@ -240,10 +242,10 @@ def in_quiet(settings: dict, now: datetime) -> bool:
 
 def clean_settings(new: dict, old: dict) -> dict:
     out = json.loads(json.dumps(old))
-    for k in ("muted", "quiet_on", "wake_on_approve", "ideas_audio"):
+    for k in ("muted", "quiet_on", "wake_on_approve", "ideas_audio", "digest_on"):
         if k in new:
             out[k] = bool(new[k])
-    for k in ("quiet_from", "quiet_to"):
+    for k in ("quiet_from", "quiet_to", "digest_time"):
         if k in new:
             v = _hhmm(str(new[k]))
             out[k] = f"{v // 60:02d}:{v % 60:02d}"
@@ -419,6 +421,8 @@ class AppState:
         self.todos = TodoHub(STATE)
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
         self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
+        self.ai = AiHub(load_json, save_json, self.deliver, self.claude, self.todos, self.docs,
+                        lambda: self.settings, lambda: in_quiet(self.settings, datetime.now()))
 
     def deliver(self, msg: dict) -> None:
         """To the app's own event stream (GET /api/events)."""
@@ -540,6 +544,7 @@ def make_app(state: AppState):
         state.events.start()
         threading.Thread(target=status_watcher, args=(state,), daemon=True).start()
         threading.Thread(target=state.system.run, daemon=True).start()
+        threading.Thread(target=state.ai.run, daemon=True).start()
         yield
 
     app = FastAPI(title="mc-pi", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -713,6 +718,8 @@ def make_app(state: AppState):
         need_pc(req)
         state.helper_at = time.time()
         out = {"inbox": state.claude.pc_inbox(), "watch": state.sessions.pc_watch()}
+        if state.ai.want_digest():
+            out["digest"] = True
         if state.system.take_shot_request():
             out["screenshot"] = True
         if state.sleep_cmd_at and time.time() - state.sleep_cmd_at < SLEEP_CMD_TTL:
@@ -733,6 +740,7 @@ def make_app(state: AppState):
         state.helper_at = time.time()
         state.system.on_pc_report(d.get("stats"))
         state.health.on_pc_report(d.get("health"))
+        state.ai.on_pc_questions(d.get("questions"))
         for a in state.claude.on_report(d):
             state.deliver({"at": time.time(), "kind": "approval", "cat": "claude",
                            "title": "Claude needs your approval", "body": a["title"],
@@ -773,9 +781,37 @@ def make_app(state: AppState):
             v["sessions"], v["pc_online"] = [], None
         v["helper"] = time.time() - state.helper_at < HELPER_STALE
         v["helpers"] = state.health.helpers()
+        v["questions"] = state.ai.questions()
+        v["digest"] = state.ai.digest_view()
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
         v["ideas_audio"] = state.settings.get("ideas_audio", False)
         return v
+
+    # ------------------------------------------------------------ helper questions + daily digest (stage 11b)
+    @app.post("/api/claude/questions/{qid}/answer")
+    def question_answer(req: Request, qid: str, d: dict = Body(default={})):
+        need_app(req)
+        try:
+            return state.ai.answer(qid, d.get("text"))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/digest/now")
+    def digest_now(req: Request):
+        need_app(req)
+        state.ai.request_now()
+        return {"ok": True}
+
+    @app.post("/api/pc/digest")
+    def pc_digest(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        try:
+            state.ai.on_digest(d)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
 
     # ------------------------------------------------------------ live sessions (Claude tab v2)
     def sess_call(fn):
@@ -800,6 +836,7 @@ def make_app(state: AppState):
         need_pc(req)
         state.sessions.on_result(d)
         state.health.on_result(d)
+        state.ai.on_result(d)
         return {"ok": True}
 
     def with_plan_info(gates):

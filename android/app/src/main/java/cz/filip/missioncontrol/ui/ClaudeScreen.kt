@@ -171,6 +171,19 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
         }
     }
 
+    fun sendAnswer(id: String, text: String) {
+        scope.launch {
+            try {
+                val r = withContext(Dispatchers.IO) { Api.post(ctx, "/api/claude/questions/$id/answer", JSONObject().put("text", text)) }
+                Toast.makeText(ctx, if (r.optBoolean("duplicate")) "Already answered" else "Answer sent", Toast.LENGTH_SHORT).show()
+            } catch (e: ApiError) {
+                Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                load()
+            }
+        }
+    }
+
     LifecycleResumeEffect(Unit) { resumed = true; onPauseOrDispose { resumed = false } }
     LaunchedEffect(resumed) { while (resumed) { load(); delay(4000) } }
 
@@ -198,13 +211,17 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                 val approvals = d.optJSONArray("approvals").objects().filter { it.optString("id") !in answered }
                 if (approvals.isNotEmpty()) Label("Approvals · ${approvals.size}", Mc.Warn)
                 val asks = (live?.optJSONArray("gates")?.length() ?: 0) + (live?.optJSONArray("proposals")?.length() ?: 0)
-                if (approvals.isEmpty() && asks == 0) Text("Nothing is waiting for you.", color = Mc.Muted, fontSize = 14.sp)
+                if (approvals.isEmpty() && asks == 0 && d.optJSONArray("questions").objects().none { it.optString("state") != "answered" }) Text("Nothing is waiting for you.", color = Mc.Muted, fontSize = 14.sp)
                 approvals.forEach { a ->
                     ApprovalCard(a, busy == a.optString("id"),
                         onAnswer = { dec, opt -> answer(a, dec, opt) },
                         onReply = { replyFor = a },
                         onPicture = { n -> bigPicture = a.getString("id") to n })
                 }
+
+                val questions = d.optJSONArray("questions").objects()
+                if (questions.isNotEmpty()) Label("Helper questions · ${questions.count { it.optString("state") != "answered" }}", Mc.Warn)
+                questions.forEach { q -> HelperQuestionCard(q) { text -> sendAnswer(q.getString("id"), text) } }
 
                 val l = live
                 if (l != null) SessionList(l, onOpen = { openSid = it }, onConfig = { gateConfig = true })
@@ -258,6 +275,41 @@ private fun rememberPicture(id: String, n: Int): ImageBitmap? {
         }
     }
     return img
+}
+
+/** A question from Gemini or Codex (`QUESTION id=...`). One tap sends the typed answer; no fingerprint. */
+@Composable
+private fun HelperQuestionCard(q: JSONObject, onSend: (String) -> Unit) {
+    val state = q.optString("state")
+    var text by remember(q.optString("id")) { mutableStateOf("") }
+    var showTask by remember { mutableStateOf(false) }
+    McCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { Label("${q.optString("helper")} asks", Mc.Accent) }
+            when (state) {
+                "answered" -> Text("Answered", color = Mc.Good, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                "sent" -> Text("Sending…", color = Mc.Muted, fontSize = 13.sp)
+            }
+        }
+        Text(q.optString("question"), color = Mc.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
+        val task = q.optString("task")
+        if (task.isNotBlank()) {
+            Text(if (showTask) task else task.take(90) + if (task.length > 90) "…" else "", color = Mc.Muted, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 4.dp).clickable { showTask = !showTask })
+        }
+        q.optString("error").takeIf { it.isNotBlank() && state == "open" }?.let {
+            Text("Last try failed: $it", color = Mc.Bad, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        if (state == "open") {
+            OutlinedTextField(value = text, onValueChange = { if (it.length <= 1000) text = it }, minLines = 2, placeholder = { Text("Your answer") },
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+            Button(onClick = { onSend(text.trim()); text = "" }, enabled = text.isNotBlank(), shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(46.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C))) {
+                Text("Send answer", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
 }
 
 @Composable

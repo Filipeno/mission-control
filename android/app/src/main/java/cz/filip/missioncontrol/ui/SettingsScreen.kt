@@ -127,6 +127,27 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                 }
             }
             McCard {
+                Label("Daily digest")
+                ToggleRow("Evening digest", st.optBoolean("digest_on")) { save(JSONObject().put("digest_on", it)) }
+                if (st.optBoolean("digest_on")) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Sent at", color = Mc.Muted, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { pickTime("digest_time", st.getString("digest_time")) }) {
+                            Text(st.getString("digest_time"), fontFamily = FontFamily.Monospace, color = Mc.Accent)
+                        }
+                    }
+                }
+                Text("Tasks done, commits, releases, usage left and what waits for you. Also saved in Docs. Quiet hours make it silent.", color = Mc.Muted, fontSize = 13.sp)
+                TextButton(onClick = {
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { Api.post(ctx, "/api/digest/now") }
+                            Toast.makeText(ctx, "Digest requested: it arrives in a minute", Toast.LENGTH_SHORT).show()
+                        } catch (e: ApiError) { Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show() }
+                    }
+                }) { Text("Send digest now", color = Mc.Accent) }
+            }
+            McCard {
                 Label("Approvals")
                 ToggleRow("Wake PC when I approve", st.optBoolean("wake_on_approve")) { save(JSONObject().put("wake_on_approve", it)) }
                 Text("When you answer an approval while the PC sleeps, the Pi wakes it.", color = Mc.Muted, fontSize = 13.sp)

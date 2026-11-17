@@ -333,6 +333,13 @@ function Handle-Item($it) {
         $env:MC_ITEM = ConvertTo-Json @{ id = "$($it.id)"; local = "$($it.local)"; title = "$($it.title)" } -Compress; $env:MC_HUB = $Hub
         try { $r = (& $py -I (Join-Path $here 'mc_health.py') 2>$null | Out-String) | ConvertFrom-Json } catch { $r = @{ ok = $false; detail = $_.Exception.Message } } finally { Remove-Item Env:MC_ITEM,Env:MC_HUB -ErrorAction SilentlyContinue }
         Send-Result $it.key ([bool]$r.ok) "$($r.detail)"
+    } elseif ($it.kind -eq 'helper-answer') {
+        $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+        if (-not $py) { Send-Result $it.key $false 'python not found on the PC'; return }
+        $env:MC_ITEM = ConvertTo-Json @{ id = "$($it.id)"; text = "$($it.text)" } -Compress; $env:MC_HUB = $Hub
+        try { $r = (& $py -I (Join-Path $here 'mc_digest.py') answer 2>$null | Out-String) | ConvertFrom-Json } catch { $r = @{ ok = $false; detail = $_.Exception.Message } } finally { Remove-Item Env:MC_ITEM,Env:MC_HUB -ErrorAction SilentlyContinue }
+        Write-Log "helper question $($it.id): $($r.detail)"
+        Send-Result $it.key ([bool]$r.ok) "$($r.detail)"
     } elseif ($it.kind -eq 'answer') {
         $pend = "$Hub\approvals\pending\$($it.id).json"
         $req = ReadJson $pend
@@ -383,6 +390,37 @@ function Handle-Item($it) {
 }
 
 # ------------------------------------------------------------------ Claude sessions (claude tab v2)
+
+# Helper questions (stage 11b): the open ones, re-read only when the inbox listing changed.
+$script:questionSig = $null; $script:questions = @()
+function Get-OpenQuestions {
+    $names = @(Get-ChildItem "$Hub\inbox\claude\*-question-*.md" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+    $sig = $names -join '|'
+    if ($sig -ne $script:questionSig) {
+        $script:questions = @()
+        if ($names.Count) {
+            $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+            if ($py) {
+                $env:MC_HUB = $Hub
+                try { $script:questions = @((& $py -I (Join-Path $here 'mc_digest.py') questions 2>$null | Out-String) | ConvertFrom-Json) } catch { Write-Log "questions: $($_.Exception.Message)" } finally { Remove-Item Env:MC_HUB -ErrorAction SilentlyContinue }
+            }
+        }
+        $script:questionSig = $sig
+    }
+    ,$script:questions
+}
+
+# Daily digest (stage 11b): computed here when the Pi asks (`digest` in the command reply), sent to the Pi.
+function Send-Digest {
+    $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $py) { throw 'python not found on the PC' }
+    $env:MC_HUB = $Hub
+    try { $json = (& $py -I (Join-Path $here 'mc_digest.py') digest 2>$null | Out-String) } finally { Remove-Item Env:MC_HUB -ErrorAction SilentlyContinue }
+    $d = $json | ConvertFrom-Json
+    if (-not $d.text) { throw 'digest came back empty' }
+    Api 'Post' '/api/pc/digest' @{ date = $d.date; text = $d.text; summary = $d.summary; counts = $d.counts } | Out-Null
+    Write-Log "digest sent ($($d.summary))"
+}
 
 function Send-Result($key, $ok, $detail) {
     try { Api 'Post' '/api/pc/result' @{ key = $key; ok = $ok; detail = "$detail" } | Out-Null } catch { Write-Log "result: $($_.Exception.Message)" }
@@ -831,13 +869,14 @@ while ($true) {
             try { Handle-Item $it; $done += $it.key } catch { if ($_.Exception.Message -notlike 'waiting:*') { Write-Log "inbox item failed: $($_.Exception.Message)" } }
         }
         if ($done.Count) { Api 'Post' '/api/pc/ack' @{ keys = $done } | Out-Null; $nextUsage = Get-Date }
+        if ($reply.digest) { try { Send-Digest } catch { Write-Log "digest: $($_.Exception.Message)" } }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
         try { Send-CardShots } catch { Write-Log "appcard screenshot: $($_.Exception.Message)" }
         try { Sync-Plans } catch { Write-Log "plans sync: $($_.Exception.Message)" }
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
-                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)) } | Out-Null
+                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }
