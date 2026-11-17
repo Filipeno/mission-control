@@ -23,7 +23,7 @@ Exit codes: 0 done, 2 bad args, 3 PC locked, 4 refused by log check, 6 no window
 | Wrong tool (`-Tool …delete_session`) | exit 4, `tool mismatch` |
 | Unknown id `00000000-1111-…` | exit 4, `unknown request id (not in the log since the last app start)` |
 | Two cards pending in one session | unit tests only (`test_two_pending_same_session`, `test_check_two_pending`); one chat can't raise two cards at once live |
-| Allow once | **not proven in this run** (see below). The earlier WIP run noted live that Invoke on "Allow once" of a background window was ignored while Deny worked, hence the bring-to-front step. |
+| Allow once | **UNVERIFIED.** No card could be raised for it: this session's starts were auto-allowed (bypass) or refused on event turns, and the orchestrator can't start sessions on message turns either. The orchestrator will arrange the live Allow proof with Filip. The earlier WIP run noted live that Invoke on "Allow once" of a background window was ignored while Deny worked, hence the bring-to-front step. |
 
 ### UIA facts seen live (app 5.11492.5)
 - Card = `Group` with class `epitaxy-approval-card …`, name `Permission request: start the session “<new title>”`. Children: Text runs ("Allow Claude to ", "start the session", "“<title>”", "?", model line, reason line, the brief), a `Button` "Background, 1 line" (ExpandCollapse), `Button` "Deny" (Invoke), `Button` "Allow once" (Invoke). No AutomationIds on any of them.
@@ -48,4 +48,4 @@ Exit codes: 0 done, 2 bad args, 3 PC locked, 4 refused by log check, 6 no window
 - On the phone answer, call `mc-appcard.ps1 -Answer <id> -Decision … -ExpectTitle <title shown on the phone> -Tool <tool shown>`; any non-zero exit goes back to the phone as "refused: <reason>".
 - Drop the phone item when list shows the card answered or aborted at the PC.
 - Hold answers while LogonUI runs; expire after 8 h.
-- Before shipping: one live Allow once on a real card (still open from this spike).
+- Before shipping: one live Allow once on a real card (UNVERIFIED in this spike).
