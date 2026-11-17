@@ -59,7 +59,7 @@ function Get-HealthReport([switch]$WithHelpers) {
     try { $s = ReadJson "$Hub\state\selftest.json"; $out.selftest = if ($s) { @{ at = "$($s.at)"; failed = @($s.failed); results = $s.results } } else { $null } } catch { $out.selftest = $null }
     if ($WithHelpers) { try {
         $usage = Join-Path $Hub 'bin\usage.ps1'; $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
-        $u = (& $shell -NoProfile -File $usage -Json 2>$null | Out-String) | ConvertFrom-Json; $cw = @($u.codex.windows)[0]
+        $tmpu = Join-Path $env:TEMP 'mc-usage-helpers.json'; Remove-Item -LiteralPath $tmpu -ErrorAction SilentlyContinue; Start-Process -FilePath $shell -ArgumentList '-NoProfile','-File',"`"$usage`"",'-Json' -RedirectStandardOutput $tmpu -WindowStyle Hidden -Wait; $u = (Get-Content -LiteralPath $tmpu -Raw -Encoding UTF8) | ConvertFrom-Json; $cw = @($u.codex.windows)[0]
         $out.helpers = @{ gemini_app = $u.gemini_app; perplexity = $u.perplexity; codex = @{ used_percent = if ($cw) { $cw.used_percent } else { $null }; resets_epoch = if ($cw) { $cw.resets_epoch } else { $null }; plan = "$($u.codex.plan)" }; parked = @($u.parked); health = $u.helper_health }
     } catch { $out.helpers = $null } } else { $out.helpers = $null }
     $out
