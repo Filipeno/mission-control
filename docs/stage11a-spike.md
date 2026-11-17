@@ -23,7 +23,8 @@ Exit codes: 0 done, 2 bad args, 3 PC locked, 4 refused by log check, 6 no window
 | Wrong tool (`-Tool …delete_session`) | exit 4, `tool mismatch` |
 | Unknown id `00000000-1111-…` | exit 4, `unknown request id (not in the log since the last app start)` |
 | Two cards pending in one session | unit tests only (`test_two_pending_same_session`, `test_check_two_pending`); one chat can't raise two cards at once live |
-| Allow once | **UNVERIFIED.** No card could be raised for it: this session's starts were auto-allowed (bypass) or refused on event turns, and the orchestrator can't start sessions on message turns either. The orchestrator will arrange the live Allow proof with Filip. The earlier WIP run noted live that Invoke on "Allow once" of a background window was ignored while Deny worked, hence the bring-to-front step. |
+| Allow once, real card `2649eccc…` (start_session in "MC card test 4 (asks to start one)", default mode, started by the orchestrator on a turn Filip typed) | exit 0, confirmed by `18:57:26 Received permission response for 2649eccc…: once`. Card emitted 18:56:14. **Method `mouse`**: UIA Invoke on "Allow once" was not confirmed within 4 s (window in front); the hardened mouse fallback (log re-check, foreground, rect and hit test right before the button goes down) clicked it. The new session "MC card test 4b" started. |
+| Wrong title / wrong tool / unknown id on that pending Allow card | exit 4 each, nothing clicked |
 
 ### UIA facts seen live (app 5.11492.5)
 - Card = `Group` with class `epitaxy-approval-card …`, name `Permission request: start the session “<new title>”`. Children: Text runs ("Allow Claude to ", "start the session", "“<title>”", "?", model line, reason line, the brief), a `Button` "Background, 1 line" (ExpandCollapse), `Button` "Deny" (Invoke), `Button` "Allow once" (Invoke). No AutomationIds on any of them.
@@ -48,4 +49,4 @@ Exit codes: 0 done, 2 bad args, 3 PC locked, 4 refused by log check, 6 no window
 - On the phone answer, call `mc-appcard.ps1 -Answer <id> -Decision … -ExpectTitle <title shown on the phone> -Tool <tool shown>`; any non-zero exit goes back to the phone as "refused: <reason>".
 - Drop the phone item when list shows the card answered or aborted at the PC.
 - Hold answers while LogonUI runs; expire after 8 h.
-- Before shipping: one live Allow once on a real card (UNVERIFIED in this spike).
+- Allow once needs the real mouse click: the app ignores UIA Invoke on "Allow once" (Deny via Invoke works). So the PC must be unlocked, the Claude window must come to the front and the cursor moves for ~0.3 s. Integration should go straight to the guarded mouse click for Allow instead of waiting 4 s for Invoke.
