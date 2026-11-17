@@ -10,9 +10,10 @@ The log has no tool input; the session title comes from the app's own session fi
 
 Commands (all print one JSON object):
   list                       pending cards with session titles
-  check <id> [--expect-title T] [--tool T] [--since N] [--card-name NAME]
+  check <id> [--expect-title T] [--tool T] [--since N] [--card-name-env]
                              may this card be answered? {ok, reason, card}
-                             (--since/--card-name: the re-check right before the click)
+                             (--since/--card-name-env: the re-check right before the click; the card's UIA name
+                              comes from env MC_CARD_NAME, never argv, so screen text can't inject options)
   offset                     current end of main.log (bytes), for "wait" and "confirm"
   wait --from N [--tool T] [--timeout S]
                              first card emitted after byte offset N
@@ -191,7 +192,8 @@ def main(argv=None):
     ap.add_argument("--tool", default="")
     ap.add_argument("--from", dest="offset", type=int, default=0)
     ap.add_argument("--since", type=int, default=-1, help="check: no other card for that session after this offset")
-    ap.add_argument("--card-name", default=None, help="check: UIA name of the card on screen; must fit the tool")
+    ap.add_argument("--card-name-env", action="store_true",
+                    help="check: UIA name of the card on screen is in env MC_CARD_NAME; must fit the tool")
     ap.add_argument("--timeout", type=float, default=10)
     ap.add_argument("--log-dir", default=str(LOG_DIR))
     ap.add_argument("--titles", default="", help="JSON file {local_id: title} instead of the app's files (tests)")
@@ -207,7 +209,8 @@ def main(argv=None):
     if a.cmd == "check":
         t = titles if titles is not None else titles_index()
         since = new_lines(a.log_dir, a.since) if a.since >= 0 else None
-        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, a.expect_title, a.tool, since, a.card_name)
+        card_name = os.environ.get("MC_CARD_NAME", "") if a.card_name_env else None
+        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, a.expect_title, a.tool, since, card_name)
         return out({"ok": ok, "reason": reason, "card": c})
     if a.cmd == "wait":
         end = time.time() + a.timeout

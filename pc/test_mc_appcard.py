@@ -227,9 +227,24 @@ class Cli(unittest.TestCase):
         with open(self.d / "main.log", "a", encoding="utf-8") as f:
             f.write(emit("eeeeeeee-0000-4000-8000-000000000005", START, S2, "12:05:00") + "\n")
             f.write(resp("eeeeeeee-0000-4000-8000-000000000005", "once", t="12:05:01") + "\n")
-        r = self.run_cli("check", C, "--since", str(off), "--card-name", "Permission request: start the session “x”")
+        os.environ["MC_CARD_NAME"] = "Permission request: start the session “x”"
+        try:
+            r = self.run_cli("check", C, "--since", str(off), "--card-name-env")
+        finally:
+            del os.environ["MC_CARD_NAME"]
         self.assertFalse(r["ok"])
         self.assertIn("new card(s)", r["reason"])
+
+    def test_check_card_name_from_env(self):
+        p = self.d / "main.log"
+        p.write_text("2026-11-17 10:00:00 [info] Starting app {\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
+        os.environ["MC_CARD_NAME"] = '" --since 0 Permission request: turn Remote Control off'
+        try:
+            r = self.run_cli("check", C, "--card-name-env")
+        finally:
+            del os.environ["MC_CARD_NAME"]
+        self.assertFalse(r["ok"])
+        self.assertIn("does not fit", r["reason"])
 
     def test_confirm_times_out(self):
         off = self.run_cli("offset")["offset"]

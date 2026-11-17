@@ -87,6 +87,7 @@ $AE = [Windows.Automation.AutomationElement]
 $CT = [Windows.Automation.ControlType]
 Add-Type -Namespace McAppCard -Name U32 -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
 [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
@@ -228,9 +229,12 @@ try {
 if ($targetNow -ne $(if ($Decision -eq 'allow') { $allowName } else { $denyName })) { $base.reason = 'button name changed'; Out-Result $base 8 }
 if ($nameNow -ne $base.cardName) { $base.reason = 'card changed before the click'; Out-Result $base 8 }
 if ($urlNow -notmatch "/epitaxy/$([regex]::Escape($card.session))(?:[/?#]|$)") { $base.reason = 'session changed before the click'; Out-Result $base 7 }
-$ra = @('check', $Answer, '--since', "$off0", '--card-name', $nameNow)
+# The card name is screen text: it goes to the helper in an env var, never as an argument.
+$env:MC_CARD_NAME = $nameNow
+$ra = @('check', $Answer, '--card-name-env')
 if ($ExpectTitle) { $ra += @('--expect-title', $ExpectTitle) }
 if ($Tool) { $ra += @('--tool', $Tool) }
+$ra += @('--since', "$off0")
 $re = Invoke-Helper $ra
 if (-not $re.ok) { $base.reason = "re-check before the click: $($re.reason)"; Out-Result $base 4 }
 # Window in front first: live, an Invoke on "Allow once" of a background window was ignored by the app (Deny was not).
@@ -243,20 +247,32 @@ $target.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
 $conf = Invoke-Helper @('confirm', $Answer, '--from', "$off", '--timeout', '4')
 if (-not $conf.ok -and $conf.reason -ne 'card aborted') {
     # Fallback: a real mouse click on the button, only if the element under its centre is that very button.
+    $re = Invoke-Helper $ra                                # still the same single pending card? (before the hit test)
+    if (-not $re.ok) { $base.reason = "re-check before the mouse click: $($re.reason)"; Out-Result $base 4 }
+    $hwnd = [IntPtr]$w.Current.NativeWindowHandle
+    try { [void][McAppCard.U32]::SetForegroundWindow($hwnd) } catch { }
+    Start-Sleep -Milliseconds 300
     $r = $target.Current.BoundingRectangle
     $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
-    $hit = $null
-    try { $hit = $AE::FromPoint((New-Object Windows.Point($x, $y))) } catch { }
-    $same = $hit -and ([Windows.Automation.Automation]::Compare($hit, $target) -or
-                       ($hit.Current.ControlType -eq $CT::Text -and [Windows.Automation.Automation]::Compare([Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($hit), $target)))
-    if (-not $same) { $base.reason = "Invoke not confirmed and the button is not on top at ($x,$y) for a mouse click"; Out-Result $base 9 }
-    $re = Invoke-Helper $ra                                # still the same single pending card?
-    if (-not $re.ok) { $base.reason = "re-check before the mouse click: $($re.reason)"; Out-Result $base 4 }
+    function Test-OnTop {
+        if ([McAppCard.U32]::GetForegroundWindow() -ne $hwnd) { return 'Claude window is not in front' }
+        if ($target.Current.BoundingRectangle -ne $r) { return 'button moved' }
+        $hit = $null
+        try { $hit = $AE::FromPoint((New-Object Windows.Point($x, $y))) } catch { }
+        $same = $hit -and ([Windows.Automation.Automation]::Compare($hit, $target) -or
+                           ($hit.Current.ControlType -eq $CT::Text -and [Windows.Automation.Automation]::Compare([Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($hit), $target)))
+        if (-not $same) { return "the button is not on top at ($x,$y)" }
+        ''
+    }
+    $why = Test-OnTop
+    if ($why) { $base.reason = "Invoke not confirmed and $why for a mouse click"; Out-Result $base 9 }
     $base.method = 'mouse'
     $old = New-Object McAppCard.U32+POINT
     [void][McAppCard.U32]::GetCursorPos([ref]$old)
     [void][McAppCard.U32]::SetCursorPos($x, $y)
-    Start-Sleep -Milliseconds 120
+    Start-Sleep -Milliseconds 60
+    $why = Test-OnTop                                      # last check, right before the button goes down
+    if ($why) { [void][McAppCard.U32]::SetCursorPos($old.X, $old.Y); $base.reason = "mouse click aborted: $why"; Out-Result $base 9 }
     [McAppCard.U32]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)   # left down
     Start-Sleep -Milliseconds 60
     [McAppCard.U32]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)   # left up
