@@ -69,6 +69,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+private fun JSONArray?.objects(): List<JSONObject> =
+    if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifier = Modifier) {
@@ -180,12 +183,132 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                     if (i < rows.size - 1) HorizontalDivider(color = Mc.Border)
                 }
             }
+            ClaudeAppCard(d.optJSONObject("claude_app"),
+                onRestart = {
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/claude/restart") }
+                            load()
+                        } catch (e: ApiError) {
+                            Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+                onEnableRemoteControl = { id ->
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/rc/enable", JSONObject().put("id", id)) }
+                            load()
+                        } catch (e: ApiError) {
+                            Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                })
+            SelfTestCard(d.optJSONObject("selftest"))
             SlimeCard(d.optJSONObject("roblox"))
             Timeline(d.optJSONArray("timeline"), moreTimeline) { moreTimeline = !moreTimeline }
         }
     }
 
     if (full && shot != null) FullScreenShot(shot!!) { full = false }
+}
+
+@Composable
+private fun ClaudeAppCard(claude: JSONObject?, onRestart: () -> Unit, onEnableRemoteControl: (String) -> Unit) {
+    if (claude == null) return
+    McCard {
+        Label("Claude app")
+        val known = claude.optBoolean("known")
+        val running = claude.optBoolean("running")
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+            Box(Modifier.size(12.dp).clip(CircleShape).background(if (known && running) Mc.Good else Mc.Bad))
+            Spacer(Modifier.width(12.dp))
+            val status = when {
+                !known -> "PC helper offline"
+                running -> "Running"
+                else -> "Not running for ${claude.optDouble("down_min").takeIf { !it.isNaN() }?.toInt() ?: 0} min"
+            }
+            Text(status, color = if (known && running) Mc.Good else Mc.Bad, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (known) {
+            Text("Chats with Remote Control: ${claude.optInt("rc_on")} on, ${claude.optInt("rc_off")} off", color = Mc.Muted, fontSize = 14.sp,
+                modifier = Modifier.padding(top = 6.dp))
+            claude.optDouble("watchdog_at").takeIf { !it.isNaN() && it > 0 }?.let {
+                Text("Watchdog last ran ${clock(it)}", color = Mc.Muted, fontSize = 14.sp)
+            }
+        }
+        val restart = claude.optJSONObject("restart")
+        restart?.let {
+            when (it.optString("state")) {
+                "requested" -> Text("Restarting…", color = Mc.Warn, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                "done", "failed" -> it.optString("detail").takeIf { detail -> detail.isNotBlank() }?.let { detail ->
+                    Text(detail, color = if (it.optString("state") == "done") Mc.Good else Mc.Bad, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                }
+            }
+        }
+        Button(onClick = onRestart, modifier = Modifier.padding(top = 10.dp), shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Text)) {
+            Text("Restart Claude app", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+    val off = claude.optJSONArray("rc_off_list") ?: return
+    if (off.length() == 0) return
+    McCard {
+        Label("Remote Control is off", Mc.Warn)
+        Text("Turn it on to let Mission Control interact with the chat. Queued chats turn on at the next Claude turn.",
+            color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+        off.objects().forEachIndexed { index, chat ->
+            if (index > 0) HorizontalDivider(color = Mc.Border, modifier = Modifier.padding(top = 10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(chat.optString("title").ifBlank { chat.optString("local") }, color = Mc.Text, fontSize = 15.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (chat.optBoolean("queued")) Text("Queued - turns on at the next Claude turn", color = Mc.Warn, fontSize = 13.sp)
+                }
+                if (!chat.optBoolean("queued")) {
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { onEnableRemoteControl(chat.optString("id")) }, shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Accent)) {
+                        Text("Turn on", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelfTestCard(selftest: JSONObject?) {
+    if (selftest == null) return
+    McCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label("Hub self-test")
+            Spacer(Modifier.weight(1f))
+            if (selftest.optBoolean("stale")) Text("stale", color = Mc.Warn, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (!selftest.optBoolean("known")) {
+            Text("no data", color = Mc.Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+            return@McCard
+        }
+        val age = selftest.optDouble("age_h").takeIf { !it.isNaN() }
+        Text("last run ${age?.let { if (it < 1) "${(it * 60).toInt()} min ago" else "${it.toInt()} h ago" } ?: "—"}",
+            color = Mc.Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+        selftest.optJSONArray("rows").objects().forEach { row ->
+            val ok = row.optBoolean("ok")
+            Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Box(Modifier.padding(top = 4.dp).size(10.dp).clip(CircleShape).background(if (ok) Mc.Good else Mc.Bad))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(row.optString("name"), color = Mc.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    row.optString("detail").takeIf { it.isNotBlank() }?.let { detail ->
+                        Text(detail, color = if (ok) Mc.Muted else Mc.Bad, fontSize = 13.sp)
+                    }
+                }
+                Text("${row.optDouble("seconds").takeIf { !it.isNaN() } ?: 0.0}s", color = Mc.Muted, fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace)
+            }
+        }
+    }
 }
 
 @Composable

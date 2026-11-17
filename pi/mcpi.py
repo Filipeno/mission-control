@@ -38,6 +38,7 @@ from sessions_hub import SessionsHub
 from docs_hub import DocsHub
 from todo_hub import TodoHub
 from system_hub import SystemHub
+from health_hub import HealthHub
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("MC_PI_ENV", HERE / "mc-pi.env"))
@@ -417,6 +418,7 @@ class AppState:
         self.docs = DocsHub(STATE)
         self.todos = TodoHub(STATE)
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
+        self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
 
     def deliver(self, msg: dict) -> None:
         """To the app's own event stream (GET /api/events)."""
@@ -730,6 +732,7 @@ def make_app(state: AppState):
         need_pc(req)
         state.helper_at = time.time()
         state.system.on_pc_report(d.get("stats"))
+        state.health.on_pc_report(d.get("health"))
         for a in state.claude.on_report(d):
             state.deliver({"at": time.time(), "kind": "approval", "cat": "claude",
                            "title": "Claude needs your approval", "body": a["title"],
@@ -769,6 +772,7 @@ def make_app(state: AppState):
         except PcWakerError:
             v["sessions"], v["pc_online"] = [], None
         v["helper"] = time.time() - state.helper_at < HELPER_STALE
+        v["helpers"] = state.health.helpers()
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
         v["ideas_audio"] = state.settings.get("ideas_audio", False)
         return v
@@ -795,6 +799,7 @@ def make_app(state: AppState):
     def pc_result(req: Request, d: dict = Body(default={})):
         need_pc(req)
         state.sessions.on_result(d)
+        state.health.on_result(d)
         return {"ok": True}
 
     def with_plan_info(gates):
@@ -1243,7 +1248,30 @@ def make_app(state: AppState):
     @app.get("/api/system")
     def system_view(req: Request):
         need_app(req)
-        return state.system.view()
+        v = state.system.view()
+        h = state.health.view()
+        v.update({k: h[k] for k in ("claude_app", "selftest")})
+        v["problems"] = v.get("problems", []) + h["problems_add"]
+        return v
+
+    @app.post("/api/system/claude/restart")
+    def system_claude_restart(req: Request):
+        need_app(req)
+        if time.time() - state.helper_at > HELPER_STALE:
+            raise HTTPException(409, "PC helper not connected (is the PC on?)")
+        state.health.request_restart()
+        return {"ok": True}
+
+    @app.post("/api/system/rc/enable")
+    def system_rc_enable(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        if time.time() - state.helper_at > HELPER_STALE:
+            raise HTTPException(409, "PC helper not connected (is the PC on?)")
+        try:
+            state.health.request_rc(d.get("id"))
+        except LookupError:
+            raise HTTPException(404, "desktop session not found")
+        return {"ok": True}
 
     @app.post("/api/system/screenshot")
     def system_shot_request(req: Request):

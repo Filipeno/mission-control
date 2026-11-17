@@ -5,7 +5,7 @@
 # Logins of Codex and Antigravity are read where their CLIs keep them, used in memory for one read-only
 # usage call, and never sent or saved. Only numbers leave the PC.
 # Config: mc-pc.json next to this file (git-ignored). Started by Task Scheduler (install-mc-pc.ps1).
-param([switch]$Test)   # -Test: print usage + report parts once and exit (nothing is sent)
+param([switch]$Test, [switch]$TestRestart)   # -Test: print usage + report parts once and exit (nothing is sent)
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $here 'mc-pc.log'
@@ -47,6 +47,23 @@ function Api($method, $path, $body = $null, $contentType = 'application/json; ch
 
 function Unix($dt) { [DateTimeOffset]::new($dt).ToUnixTimeSeconds() }
 function ReadJson($path) { if (Test-Path -LiteralPath $path) { Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json } }
+
+function Get-ClaudeAppProcesses { @(Get-Process Claude -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\WindowsApps\Claude_*\app\Claude.exe' }) }
+
+function Get-HealthReport([switch]$WithHelpers) {
+    $out = @{}
+    if ($WithHelpers) { try {
+        $watch = "$Hub\state\claude-app-watchdog.json"; $w = ReadJson $watch
+        $out.claude = @{ running = [bool](Get-ClaudeAppProcesses); down_since = if ($w) { "$($w.downSince)" } else { $null }; last_ok = if ($w) { "$($w.lastOk)" } else { $null }; watchdog_at = if (Test-Path -LiteralPath $watch) { Unix (Get-Item -LiteralPath $watch).LastWriteTime } else { $null } }
+    } catch { $out.claude = $null }
+    try { $s = ReadJson "$Hub\state\selftest.json"; $out.selftest = if ($s) { @{ at = "$($s.at)"; failed = @($s.failed); results = $s.results } } else { $null } } catch { $out.selftest = $null }
+    try {
+        $usage = Join-Path $Hub 'bin\usage.ps1'; $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
+        $u = (& $shell -NoProfile -File $usage -Json 2>$null | Out-String) | ConvertFrom-Json; $cw = @($u.codex.windows)[0]
+        $out.helpers = @{ gemini_app = $u.gemini_app; perplexity = $u.perplexity; codex = @{ used_percent = if ($cw) { $cw.used_percent } else { $null }; resets_epoch = if ($cw) { $cw.resets_epoch } else { $null }; plan = "$($u.codex.plan)" }; parked = @($u.parked); health = $u.helper_health }
+    } catch { $out.helpers = $null } } else { $out.helpers = $null }
+    $out
+}
 
 # ------------------------------------------------------------------ usage
 
@@ -308,7 +325,15 @@ function Write-InboxMessage($topic, $body) {
 
 function Handle-Item($it) {
     $date = (Get-Date -Format 'yyyy-MM-dd HH:mm')
-    if ($it.kind -eq 'answer') {
+    if ($it.kind -eq 'claude-restart') {
+        $r = Restart-ClaudeApp; Send-Result $it.key ([bool]$r.ok) $r.detail
+    } elseif ($it.kind -eq 'rc-queue') {
+        $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+        if (-not $py) { Send-Result $it.key $false 'python not found on the PC'; return }
+        $env:MC_ITEM = ConvertTo-Json @{ id = "$($it.id)"; local = "$($it.local)"; title = "$($it.title)" } -Compress; $env:MC_HUB = $Hub
+        try { $r = (& $py -I (Join-Path $here 'mc_health.py') 2>$null | Out-String) | ConvertFrom-Json } catch { $r = @{ ok = $false; detail = $_.Exception.Message } } finally { Remove-Item Env:MC_ITEM,Env:MC_HUB -ErrorAction SilentlyContinue }
+        Send-Result $it.key ([bool]$r.ok) "$($r.detail)"
+    } elseif ($it.kind -eq 'answer') {
         $pend = "$Hub\approvals\pending\$($it.id).json"
         $req = ReadJson $pend
         $title = if ($req) { $req.title } else { $it.title }
@@ -361,6 +386,19 @@ function Handle-Item($it) {
 
 function Send-Result($key, $ok, $detail) {
     try { Api 'Post' '/api/pc/result' @{ key = $key; ok = $ok; detail = "$detail" } | Out-Null } catch { Write-Log "result: $($_.Exception.Message)" }
+}
+
+function Restart-ClaudeApp([switch]$DryRun) {
+    $procs = @(Get-ClaudeAppProcesses)
+    if ($DryRun) { Write-Log "Claude restart dry run: would stop $($procs.Count) process(es) and start Claude"; return @{ ok = $true; detail = 'dry run' } }
+    try {
+        Write-Log "Claude restart: stopping $($procs.Count) process(es)"; foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        $until = (Get-Date).AddSeconds(10); while ((Get-Date) -lt $until -and @(Get-ClaudeAppProcesses).Count) { Start-Sleep -Milliseconds 300 }
+        $alias = "$env:LOCALAPPDATA\Microsoft\WindowsApps\claude-desktop.exe"
+        if (Test-Path -LiteralPath $alias) { Start-Process -FilePath $alias -ArgumentList '--startup' } else { Start-Process explorer.exe 'shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude' }
+        $until = (Get-Date).AddSeconds(30); while ((Get-Date) -lt $until) { if (@(Get-ClaudeAppProcesses).Count) { return @{ ok = $true; detail = 'restarted' } }; Start-Sleep -Seconds 1 }
+        return @{ ok = $false; detail = 'did not come back' }
+    } catch { Write-Log "Claude restart failed: $($_.Exception.Message)"; return @{ ok = $false; detail = 'did not come back' } }
 }
 
 $script:typeCodes = @{ 0 = 'sent'; 2 = 'bad message'; 3 = 'PC is locked'; 5 = 'there is a draft in that session''s prompt box'
@@ -773,6 +811,7 @@ if ($Test) {
     ConvertTo-Json @{ parked = Get-Parked; logs = @((Tail-Logs).Keys); handoff_chars = (Handoff-Summary).Length } -Depth 4
     exit
 }
+if ($TestRestart) { Restart-ClaudeApp -DryRun | ConvertTo-Json -Compress; exit }
 $mutex = New-Object System.Threading.Mutex($false, 'Global\mission-control-mc-pc')
 if (-not $mutex.WaitOne(0)) { exit }   # already running
 
@@ -798,7 +837,7 @@ while ($true) {
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
-                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats) } | Out-Null
+                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }

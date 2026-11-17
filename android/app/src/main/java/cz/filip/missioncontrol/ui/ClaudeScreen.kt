@@ -213,6 +213,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
 
                 Label("Usage")
                 UsageCard(d.optJSONObject("usage") ?: JSONObject(), d.optJSONObject("parked") ?: JSONObject())
+                d.optJSONObject("helpers")?.let { HelpersCard(it) }
 
                 HubStatus(d.optJSONObject("logs") ?: JSONObject(), d.optString("handoff"))
             }
@@ -389,6 +390,34 @@ private fun UsageCard(usage: JSONObject, parked: JSONObject) {
             }
             if (key == "codex" && u.optInt("reset_credits") > 0) Text("${u.optInt("reset_credits")} usage resets available", color = Mc.Muted, fontSize = 13.sp)
             u.optString("error").takeIf { it.isNotBlank() }?.let { Text(it, color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun HelpersCard(helpers: JSONObject) {
+    McCard {
+        Label("Helpers today")
+        fun jobsLeft(key: String): Int? = helpers.optJSONObject(key)?.let {
+            (it.optInt("daily_cap") - it.optInt("jobs_today")).coerceAtLeast(0)
+        }
+        jobsLeft("gemini_app")?.let { Text("Gemini app jobs left: $it", color = Mc.Text, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp)) }
+        jobsLeft("perplexity")?.let { Text("Perplexity jobs left: $it", color = Mc.Text, fontSize = 14.sp) }
+        helpers.optJSONObject("codex")?.let { codex ->
+            val used = codex.optDouble("used_percent").takeIf { !it.isNaN() }
+            val reset = codex.optDouble("resets_epoch").takeIf { !it.isNaN() && it > 0 }
+            used?.let {
+                Text("Codex ${it.toInt()}% used - resets ${reset?.let(::backAt) ?: "—"}", color = Mc.Text, fontSize = 14.sp)
+            }
+        }
+        helpers.optJSONArray("parked").strings().takeIf { it.isNotEmpty() }?.let { parked ->
+            Text("Parked helpers: ${parked.joinToString(", ")}", color = Mc.Warn, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+        val health = helpers.optJSONObject("health") ?: helpers.optJSONObject("helper_health")
+        health?.keys()?.asSequence()?.forEach { name ->
+            val h = health.optJSONObject(name) ?: return@forEach
+            val success = h.optDouble("success_percent").takeIf { !it.isNaN() } ?: return@forEach
+            Text("$name: ${success.toInt()}% success", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
