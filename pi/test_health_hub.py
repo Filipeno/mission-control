@@ -46,3 +46,13 @@ class HealthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HelpersKeptTest(unittest.TestCase):
+    def test_helpers_survive_reports_without_them(self):
+        import health_hub
+        saved = {}
+        hub = health_hub.HealthHub(None, lambda n, d: d, lambda n, o: saved.__setitem__(n, o), lambda e: None, None, None)
+        hub.on_pc_report({"claude": {"running": True}, "helpers": {"perplexity": {"jobs_today": 1, "daily_cap": 30}}})
+        hub.on_pc_report({"claude": {"running": True}, "helpers": None})
+        self.assertEqual(hub.helpers()["perplexity"]["daily_cap"], 30)

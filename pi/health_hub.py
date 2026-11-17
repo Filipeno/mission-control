@@ -53,6 +53,8 @@ class HealthHub:
     def on_pc_report(self, health):
         if not isinstance(health, dict):
             return
+        if not isinstance(health.get("helpers"), dict):          # helpers arrive every 10 min only: keep the last ones
+            health = dict(health, helpers=self.health.get("helpers"))
         self.health = health
         self.report_at = time.time()
         self._save_health()
