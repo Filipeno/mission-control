@@ -10,7 +10,7 @@ The log has no tool input; the session title comes from the app's own session fi
 
 Commands (all print one JSON object):
   list                       pending cards with session titles
-  check <id> [--expect-title T] [--tool T] [--since N] [--card-name-env]
+  check <id> [--expect-title T | --expect-title-env] [--tool T] [--since N] [--card-name-env]
                              may this card be answered? {ok, reason, card}
                              (--since/--card-name-env: the re-check right before the click; the card's UIA name
                               comes from env MC_CARD_NAME, never argv, so screen text can't inject options)
@@ -189,6 +189,7 @@ def main(argv=None):
     ap.add_argument("cmd", choices=["list", "check", "offset", "wait", "confirm"])
     ap.add_argument("id", nargs="?", default="")
     ap.add_argument("--expect-title", default="")
+    ap.add_argument("--expect-title-env", action="store_true", help="check: expected title is in env MC_EXPECT_TITLE")
     ap.add_argument("--tool", default="")
     ap.add_argument("--from", dest="offset", type=int, default=0)
     ap.add_argument("--since", type=int, default=-1, help="check: no other card for that session after this offset")
@@ -210,7 +211,8 @@ def main(argv=None):
         t = titles if titles is not None else titles_index()
         since = new_lines(a.log_dir, a.since) if a.since >= 0 else None
         card_name = os.environ.get("MC_CARD_NAME", "") if a.card_name_env else None
-        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, a.expect_title, a.tool, since, card_name)
+        expect = os.environ.get("MC_EXPECT_TITLE", "") if a.expect_title_env else a.expect_title
+        ok, reason, c = check(parse(read_log(a.log_dir)), a.id, t, expect, a.tool, since, card_name)
         return out({"ok": ok, "reason": reason, "card": c})
     if a.cmd == "wait":
         end = time.time() + a.timeout

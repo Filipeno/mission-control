@@ -2,7 +2,8 @@
 
 Prints one JSON object to stdout:
   sessions  live sessions from ~/.claude/sessions (title, folder, status, what it waits for, last activity)
-  gates     open requests of the phone-gate hook (D:\\ai-hub\\gate\\pending), exact tool input included
+  gates     open requests of the phone-gate hook (D:\\ai-hub\\gate\\pending), exact tool input included,
+            plus the Claude desktop app's own pending approval cards (kind "appcard", stage 11a-1, see mc_appgate.py)
   proposals "start a new session" cards a session proposed and nobody has started or withdrawn yet
   watch     (with --watch <sessionId>) the last activity rows of that one session
   plans     every ~/.claude/plans/*.md with the session that owns it (stage 11d part 2); sessions carry plan_slugs
@@ -382,6 +383,26 @@ def plan_list(live: list, cache: dict) -> list:
     return out
 
 
+def appcard_gates(sessions: list) -> list:
+    """The desktop app's own pending Allow/Deny cards (main.log), with the tool input from the transcript."""
+    here = str(Path(__file__).resolve().parent)       # python -I leaves the script folder out of sys.path
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import mc_appcard
+    import mc_appgate
+    cards = mc_appcard.pending(mc_appcard.parse(mc_appcard.read_log()))
+    if not cards:
+        return []
+
+    def open_blocks(sid):
+        tp = find_transcript(sid)
+        if not tp:
+            return []
+        _, open_ids = build_rows(read_tail(tp, TAIL_LIST))
+        return list(open_ids.values())
+    return mc_appgate.build_gates(cards, mc_appcard.titles_index(), sessions, open_blocks)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--watch", default="")
@@ -465,6 +486,10 @@ def main():
             mine = [p for p in result["plans"] if (p.get("owner") or {}).get("sid") == g.get("session_id")]
             if mine:
                 g["doc"] = max(mine, key=lambda p: p["mtime"])["doc"]
+    try:
+        result["gates"] += appcard_gates(result["sessions"])
+    except Exception:                                        # app cards are a bonus: never break the session list
+        pass
     if a.watch and "watch" not in result:
         result["watch"] = {"id": a.watch, "rows": [], "gone": True}
     data = json.dumps(result, ensure_ascii=False).encode("utf-8")

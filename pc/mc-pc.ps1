@@ -334,6 +334,8 @@ function Handle-Item($it) {
         [IO.File]::WriteAllText("$Hub\gate\answered\$($it.id).json", (ConvertTo-Json $ans -Depth 6), $utf8)
         Write-Log "gate $($it.id): $($it.decision)"
         Send-Result $it.key $true 'answered'
+    } elseif ($it.kind -eq 'appcard') {
+        Answer-AppCard $it
     } elseif ($it.kind -eq 'gate-config') {
         New-Item -ItemType Directory -Force "$Hub\gate" | Out-Null
         [IO.File]::WriteAllText("$Hub\gate\config.json", (ConvertTo-Json @{ auto = "$($it.auto)"; enabled = [bool]$it.enabled }), $utf8)
@@ -385,6 +387,45 @@ function Send-Typed($it) {
     if ($code -eq 3) { throw "waiting: $why" }          # not acked: tried again on the next poll
     Send-Result $it.key ($code -eq 0) $why
 }
+# ------------------------------------------------------------------ the desktop app's own approval cards (stage 11a-1)
+
+$script:cardWaitTold = @{}
+function Answer-AppCard($it) {
+    # Filip's answer to an app card (Allow signed with his fingerprint on the Pi, Deny one tap). mc_appgate.py decides:
+    # expired (8 h) / gone (answered at the PC) / held (PC locked: not acked, tried again next poll) / clicked / refused.
+    $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $py) { Send-Result $it.key $false 'python not found on the PC'; return }
+    $env:MC_ITEM = (ConvertTo-Json @{ card = "$($it.card)"; decision = "$($it.decision)"; title = "$($it.title)"
+                                      tool = "$($it.tool)"; at = [double]$it.at } -Compress)
+    try { $raw = & $py -I (Join-Path $here 'mc_appgate.py') answer 2>$null | Out-String } finally { Remove-Item Env:MC_ITEM -ErrorAction SilentlyContinue }
+    $r = $null
+    try { $r = $raw | ConvertFrom-Json } catch { }
+    if (-not $r) { Write-Log "appcard $($it.card): no answer from mc_appgate.py"; Send-Result $it.key $false 'refused: PC helper error'; return }
+    if ($r.state -eq 'held') {
+        if (-not $script:cardWaitTold[$it.key]) { Write-Log "appcard $($it.card) $($it.decision): $($r.detail)"; Send-Result $it.key $null $r.detail; $script:cardWaitTold[$it.key] = 1 }
+        throw "waiting: $($r.detail)"                       # not acked: tried again on the next poll
+    }
+    $script:cardWaitTold.Remove($it.key)
+    Write-Log "appcard $($it.card) $($it.decision) '$($it.title)': $($r.state) $($r.detail)"
+    Send-Result $it.key ([bool]$r.ok) $r.detail
+}
+
+$script:cardShots = @{}
+function Send-CardShots {
+    # A fresh PC screenshot for every app card the phone has not got one for yet (mc-shot.py sends it, nothing is saved).
+    $snap = ReadJson (Join-Path $env:TEMP 'mc-sessions.json')
+    if (-not $snap) { return }
+    $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $py) { return }
+    foreach ($g in @($snap.gates | Where-Object { $_.kind -eq 'appcard' })) {
+        $id = "$($g.id)"
+        if ($id -notmatch '^ac-[0-9a-f-]{36}$' -or $script:cardShots[$id]) { continue }
+        $script:cardShots[$id] = 1
+        $out = & $py -I (Join-Path $here 'mc-shot.py') --appcard $id 2>&1 | Out-String
+        Write-Log "appcard $id screenshot: $($out.Trim())"
+    }
+}
+
 $script:sessionsAt = [datetime]::MinValue
 function Send-Sessions($watch) {
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
@@ -737,6 +778,7 @@ while ($true) {
         }
         if ($done.Count) { Api 'Post' '/api/pc/ack' @{ keys = $done } | Out-Null; $nextUsage = Get-Date }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
+        try { Send-CardShots } catch { Write-Log "appcard screenshot: $($_.Exception.Message)" }
         try { Sync-Plans } catch { Write-Log "plans sync: $($_.Exception.Message)" }
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {

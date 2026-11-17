@@ -246,6 +246,21 @@ class Cli(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("does not fit", r["reason"])
 
+    def test_check_expect_title_from_env(self):
+        p = self.d / "main.log"
+        p.write_text("2026-11-17 10:00:00 [info] Starting app {\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
+        title = TITLES[S2]
+        for t, ok in ((title, True), ("-x Other", False), ("", None)):
+            os.environ["MC_EXPECT_TITLE"] = t
+            try:
+                r = self.run_cli("check", C, "--expect-title-env")
+            finally:
+                del os.environ["MC_EXPECT_TITLE"]
+            if ok is None:
+                self.assertTrue(r["ok"])               # empty = no title check here (mc-appcard.ps1 refuses an empty env title itself)
+            else:
+                self.assertEqual(r["ok"], ok, r)
+
     def test_confirm_times_out(self):
         off = self.run_cli("offset")["offset"]
         r = self.run_cli("confirm", C, "--from", str(off), "--timeout", "0.5")

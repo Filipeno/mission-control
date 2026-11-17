@@ -10,6 +10,9 @@ Signed strings:
   start proposal "start|<key>|<ts>"
   gate settings  "gate-config|<auto>|<enabled 0/1>|<ts>"
   doc start      "docstart|<doc slug>|<ts>"   (types a request into the boss session, which starts a session for a doc)
+App cards (stage 11a-1): the Claude desktop app's own approval cards come in the snapshot as gates of kind "appcard"
+(id "ac-<request id>"). Allow needs the signature like every gate; Deny is accepted unsigned (one tap), only as deny.
+Never "always". mc-pc clicks the card and reports clicked / refused / "waiting for unlock" (held up to 8 h).
 """
 import json
 import re
@@ -18,7 +21,9 @@ import threading
 import time
 
 SID_RE = re.compile(r"^[0-9a-f-]{36}$")
-GID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$")
+GID_RE = re.compile(r"^(?:[0-9]{8}-[0-9]{6}-[0-9a-f]{4}|ac-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
+CARD_PREFIX = "ac-"
+SHOT_MAX = 12           # app card screenshots kept in memory (never written to disk)
 KEY_RE = re.compile(r"^(task_[0-9a-f]{6,}|offer-[A-Za-z0-9_-]{4,20})$")
 WATCH_TTL = 30          # mc-pc sends activity of the open session while the phone asked within this time
 FRESH = 30              # a snapshot older than this = PC helper not reporting
@@ -40,6 +45,8 @@ class SessionsHub:
         self.seen = set(self.load("sessions-seen.json", []))     # gate ids / proposal keys already notified
         self.hidden = set(self.load("proposals-hidden.json", []))
         self.config = self.load("gate-config.json", {"auto": "readonly", "enabled": True})
+        self.card_answers = {}                      # app card gate id -> queue key of Filip's answer (its result = card status)
+        self.card_shots = {}                        # app card gate id -> (jpeg bytes, at)
 
     # ------------------------------------------------------------ from mc-pc
 
@@ -51,7 +58,7 @@ class SessionsHub:
         notify = []
         with self.lock:
             for g in gates:
-                g["session"] = titles.get(g.get("session_id"), "Claude")
+                g["session"] = titles.get(g.get("session_id")) or g.get("card_title") or "Claude"
                 if g["id"] not in self.seen:
                     self.seen.add(g["id"])
                     notify.append(("gate", g))
@@ -76,6 +83,8 @@ class SessionsHub:
                     title, body = f"{x['session']} asks", str(qs[0].get("question") or "a question")[:200]
                 elif x["kind"] == "plan":
                     title, body = f"{x['session']}: plan ready", "Tap to read the plan, comment and approve or reject it."
+                elif x["kind"] == "appcard":
+                    title, body = f"{x['session']}: app card waiting", x["summary"][:200]
                 else:
                     title, body = f"{x['session']} needs permission", x["summary"][:200]
             else:
@@ -107,11 +116,15 @@ class SessionsHub:
     def list_view(self) -> dict:
         with self.lock:
             s = self.snap
-            return {"sessions": s["sessions"], "gates": [_gate_brief(g) for g in s["gates"]],
+            return {"sessions": s["sessions"], "gates": [self._card_extras(_gate_brief(g)) for g in s["gates"]],
                     "proposals": [p for p in s["proposals"] if p["key"] not in self.hidden],
                     "at": s["at"], "fresh": time.time() - s["at"] < FRESH, "gate_config": dict(self.config)}
 
     def session_view(self, sid: str) -> dict:
+        if sid.startswith(CARD_PREFIX) and GID_RE.match(sid):      # an app card whose session is not in the live list
+            g = self.card_gate(sid)
+            return {"session": None, "rows": [], "rows_at": None, "gone": False, "gates": [g] if g else [], "proposals": [],
+                    "outbox": [], "fresh": time.time() - self.snap["at"] < FRESH}
         if not SID_RE.match(sid):
             raise ValueError("bad session id")
         with self.lock:
@@ -121,7 +134,7 @@ class SessionsHub:
             outbox = sorted(({"key": k, **{f: v[f] for f in ("ok", "detail", "at", "text", "kind")}}
                              for k, v in self.results.items() if v.get("sid") == sid), key=lambda r: -r["at"])[:5]
             return {"session": s, "rows": rows.get("rows", []), "rows_at": rows.get("at"), "gone": rows.get("gone", False),
-                    "gates": [g for g in self.snap["gates"] if g.get("session_id") == sid],
+                    "gates": [self._card_extras(dict(g)) for g in self.snap["gates"] if g.get("session_id") == sid],
                     "proposals": [p for p in self.snap["proposals"] if p["session_id"] == sid and p["key"] not in self.hidden],
                     "outbox": outbox, "fresh": time.time() - self.snap["at"] < FRESH}
 
@@ -130,6 +143,8 @@ class SessionsHub:
         payload = str(d.get("payload") or "")[:8000]
         if decision not in ("allow", "deny", "answer") or not GID_RE.match(gid):
             raise ValueError("bad answer")
+        if gid.startswith(CARD_PREFIX):
+            return self._answer_card(token_hash, gid, decision, payload, d)
         self._verify(token_hash, f"gate|{gid}|{decision}|{payload}", d)
         with self.lock:
             g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
@@ -153,6 +168,50 @@ class SessionsHub:
             self._trim_results()
         self.claude.enqueue(item)
         return {"ok": True, "key": item["key"]}
+
+    def _answer_card(self, token_hash: str, gid: str, decision: str, payload: str, d: dict) -> dict:
+        """An app card: Allow only with a valid signature; Deny one tap (a signature, if sent, must still be valid)."""
+        if decision not in ("allow", "deny") or payload:
+            raise ValueError("an app card takes only Allow or Deny")
+        if decision == "allow" or d.get("sig"):
+            self._verify(token_hash, f"gate|{gid}|{decision}|", d)
+        with self.lock:
+            g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
+            if not g or g.get("kind") != "appcard":
+                raise LookupError("this card is no longer open (answered at the PC?)")
+            if not g.get("answerable"):
+                raise ValueError("this kind of app card can only be answered at the PC")
+            prev = self.results.get(self.card_answers.get(gid, ""))
+            if prev and prev.get("ok") is not False:
+                raise LookupError("this card was already answered from the phone")
+            item = {"key": secrets.token_hex(8), "kind": "appcard", "id": gid, "card": g["card"], "decision": decision,
+                    "title": g.get("card_title", ""), "tool": g["tool"], "at": time.time()}
+            self.results[item["key"]] = {"ok": None, "detail": "sent to the PC", "at": time.time(),
+                                         "sid": g.get("session_id"), "text": decision, "kind": "appcard", "gid": gid}
+            self.card_answers[gid] = item["key"]
+            self._trim_results()
+        self.claude.enqueue(item)
+        return {"ok": True, "key": item["key"]}
+
+    def card_answer(self, gid: str):
+        """Status of Filip's answer to an app card: {decision, ok, detail, at} or None. Call with the lock held."""
+        r = self.results.get(self.card_answers.get(gid, ""))
+        return {"decision": r["text"], "ok": r["ok"], "detail": r["detail"], "at": r["at"]} if r else None
+
+    def save_card_shot(self, gid: str, data: bytes) -> None:
+        if not GID_RE.match(gid) or not gid.startswith(CARD_PREFIX):
+            raise ValueError("bad app card id")
+        if not data.startswith(b"\xff\xd8") or len(data) > 4 * 1024 * 1024:
+            raise ValueError("not a JPEG (or too big)")
+        with self.lock:
+            self.card_shots[gid] = (data, time.time())
+            for k in sorted(self.card_shots, key=lambda k: self.card_shots[k][1])[:-SHOT_MAX]:
+                del self.card_shots[k]
+
+    def card_shot(self, gid: str):
+        with self.lock:
+            x = self.card_shots.get(gid)
+            return x[0] if x else None
 
     def send_message(self, token_hash: str, sid: str, d: dict) -> dict:
         text = str(d.get("text") or "").strip()[:4000]
@@ -242,6 +301,18 @@ class SessionsHub:
         self.claude.enqueue(item)
         return {"ok": True, "key": item["key"]}
 
+    def card_gate(self, gid: str):
+        """One gate with its full input (an app card whose PC session is not in the live list has no session view)."""
+        with self.lock:
+            g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
+            return self._card_extras(dict(g)) if g else None
+
+    def _card_extras(self, g: dict) -> dict:
+        if g.get("kind") == "appcard":
+            g["answer"] = self.card_answer(g["id"])
+            g["has_shot"] = g["id"] in self.card_shots
+        return g
+
     def _verify(self, token_hash: str, msg: str, d: dict) -> None:
         self.claude.verify(token_hash, f"{msg}|{int(d.get('ts') or 0)}", str(d.get("sig", "")), int(d.get("ts") or 0))
 
@@ -269,11 +340,20 @@ def _clean_gate(g: dict) -> dict:
     return {"id": g["id"], "kind": _s(g.get("kind"), 12), "tool": _s(g.get("tool"), 80), "input": inp if len(raw) <= 40000 else {},
             "truncated": bool(g.get("truncated")) or len(raw) > 40000, "session_id": _s(g.get("session_id"), 40),
             "cwd": _s(g.get("cwd"), 200), "agent": _s(g.get("agent"), 60), "created": float(g.get("created") or 0),
-            "doc": _s(g.get("doc"), 70), "summary": _summary(_s(g.get("tool"), 80), inp)}
+            "doc": _s(g.get("doc"), 70), "summary": _summary(_s(g.get("tool"), 80), inp), **_card_fields(g)}
+
+
+def _card_fields(g: dict) -> dict:
+    """Extra fields of an app card gate. The kind is "appcard" exactly when the id says so (a hook request can't pose as one)."""
+    if not str(g["id"]).startswith(CARD_PREFIX):
+        return {"kind": _s(g.get("kind"), 12) if g.get("kind") != "appcard" else "permission"}
+    card = str(g["id"])[len(CARD_PREFIX):]
+    return {"kind": "appcard", "card": card, "card_title": _s(g.get("card_title"), 100), "local": _s(g.get("local"), 60),
+            "answerable": bool(g.get("answerable")), "input_found": bool(g.get("input_found"))}
 
 
 def _gate_brief(g: dict) -> dict:
-    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created", "doc") if k in g}
+    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created", "doc", "card_title", "answerable") if k in g}
 
 
 def _summary(tool: str, inp: dict) -> str:
@@ -284,6 +364,8 @@ def _summary(tool: str, inp: dict) -> str:
     if tool == "AskUserQuestion":
         qs = inp.get("questions") or [{}]
         return _s(qs[0].get("question"), 300)
+    if tool == "mcp__ccd_session__start_session" and (inp.get("title") or inp.get("prompt")):
+        return "Start session: " + _s(inp.get("title") or inp.get("prompt"), 280)
     if tool == "ExitPlanMode":
         return "Plan: " + _s(inp.get("plan"), 280)
     return re.sub(r"^mcp__.+?__", "", tool)

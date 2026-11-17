@@ -352,7 +352,7 @@ private fun Timeline(arr: JSONArray?, more: Boolean, toggle: () -> Unit) {
 }
 
 @Composable
-private fun FullScreenShot(img: ImageBitmap, onClose: () -> Unit) {
+internal fun FullScreenShot(img: ImageBitmap, onClose: () -> Unit) {
     var scale by remember { mutableStateOf(1f) }
     var off by remember { mutableStateOf(Offset.Zero) }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {

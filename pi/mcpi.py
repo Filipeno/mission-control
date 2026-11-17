@@ -530,7 +530,7 @@ def build_home(state: AppState) -> dict:
 
 def make_app(state: AppState):
     from fastapi import Body, FastAPI, HTTPException, Request
-    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -832,6 +832,24 @@ def make_app(state: AppState):
         r = sess_call(lambda: state.sessions.answer_gate(_hash_token(bearer(req)), gid, d))
         state.system.log("approval", f"Claude request answered from the phone: {d.get('decision')}")
         return r
+
+    @app.get("/api/appcard/{gid}/shot")
+    def appcard_shot(req: Request, gid: str):
+        """The PC screenshot taken when this app card appeared (stage 11a-1; kept in memory only)."""
+        need_app(req)
+        data = state.sessions.card_shot(gid[:40])
+        if not data:
+            raise HTTPException(404, "no screenshot for this card")
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/pc/appcard/{gid}/shot")
+    async def pc_appcard_shot(req: Request, gid: str):
+        need_pc(req)
+        try:
+            state.sessions.save_card_shot(gid[:40], await req.body())
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
 
     @app.post("/api/proposals/{key}/start")
     def proposal_start(req: Request, key: str, d: dict = Body(default={})):

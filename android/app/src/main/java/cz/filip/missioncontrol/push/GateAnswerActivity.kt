@@ -21,6 +21,22 @@ class GateAnswerActivity : FragmentActivity() {
         val summary = intent.getStringExtra("summary") ?: ""
         val notif = intent.getIntExtra("notif", 0)
         val app = applicationContext
+        if (intent.getStringExtra("gkind") == "appcard") {
+            // Claude app card: Deny is one tap, no fingerprint (the Pi takes an unsigned answer for an app card only as Deny).
+            if (decision != "deny") return finish()
+            app.getSystemService(NotificationManager::class.java).cancel(notif)
+            toast("Deny sent to the PC")
+            thread {
+                try {
+                    Api.post(app, "/api/gate/$gate/answer", JSONObject().put("decision", "deny").put("payload", ""))
+                } catch (e: Exception) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        Toast.makeText(app, "Not sent: ${e.message ?: "failed"}. Answer it in the app.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            return finish()
+        }
         thread {
             val reg = runCatching { if (Signer.needsRegister(app)) Signer.register(app); true }.getOrDefault(false)
             runOnUiThread {

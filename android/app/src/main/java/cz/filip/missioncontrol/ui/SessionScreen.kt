@@ -142,8 +142,10 @@ fun SessionList(s: JSONObject, onOpen: (String) -> Unit, onConfig: () -> Unit) {
     if (gates.isNotEmpty() || props.isNotEmpty()) {
         Label("Asks you · ${gates.size + props.size}", Mc.Warn)
         gates.forEach { g ->
-            McCard(onClick = { onOpen(g.optString("session_id")) }) {
-                Label(if (g.optString("kind") == "question") "Question" else if (g.optString("kind") == "plan") "Plan" else "Permission · ${g.optString("tool")}", Mc.Warn)
+            // An app card whose PC session is not in the live list opens on its own (the Pi serves it by its gate id).
+            McCard(onClick = { onOpen(g.optString("session_id").ifBlank { g.optString("id") }) }) {
+                Label(when (g.optString("kind")) { "question" -> "Question"; "plan" -> "Plan"; "appcard" -> "Claude app card · ${toolShort(g.optString("tool"))}"
+                    else -> "Permission · ${g.optString("tool")}" }, Mc.Warn)
                 Text(g.optString("summary"), color = Mc.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 3,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
                 Text(g.optString("session"), color = Mc.Muted, fontSize = 13.sp)
@@ -285,7 +287,30 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                         androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(900), androidx.compose.animation.core.RepeatMode.Reverse), label = "a")
                     Text("● Claude is working…", color = Mc.Accent.copy(alpha = a), fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp))
                 }
-                d.optJSONArray("gates").objs().filter { "gate:" + it.optString("id") !in gone }.forEach { g -> GateCard(g, busy) { decision, payload, label ->
+                d.optJSONArray("gates").objs().filter { it.optString("kind") == "appcard" }.forEach { g ->
+                    // App card: Allow needs the fingerprint, Deny is one tap. It stays on screen to show what the PC did.
+                    val gid = g.optString("id")
+                    val label = "Claude app card · ${toolShort(g.optString("tool"))}"
+                    AppCardGate(g, busy, onAllow = {
+                        busy = true
+                        signedPostEx(ctx, "Allow once: $label", "gate|$gid|allow|", "/api/gate/$gid/answer",
+                            JSONObject().put("decision", "allow").put("payload", ""), hasKey,
+                            onSigned = { busy = false; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() }) { err ->
+                            busy = false
+                            if (err != null) Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show()
+                            scope.launch { load() }
+                        }
+                    }, onDeny = {
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { Api.post(ctx, "/api/gate/$gid/answer", JSONObject().put("decision", "deny").put("payload", "")) }
+                                Toast.makeText(ctx, "Deny sent to the PC", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) { Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show() }
+                            load()
+                        }
+                    })
+                }
+                d.optJSONArray("gates").objs().filter { it.optString("kind") != "appcard" && "gate:" + it.optString("id") !in gone }.forEach { g -> GateCard(g, busy) { decision, payload, label ->
                     val key = "gate:" + g.optString("id")
                     busy = true
                     signedPostEx(ctx, label, "gate|${g.optString("id")}|$decision|$payload", "/api/gate/${g.optString("id")}/answer",
@@ -477,7 +502,7 @@ private fun ActivityRow(r: JSONObject) {
 }
 
 @Composable
-private fun CodeBox(text: String) {
+internal fun CodeBox(text: String) {
     Text(text, color = Mc.Text, fontSize = 12.5.sp, fontFamily = FontFamily.Monospace,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(max = 420.dp).clip(RoundedCornerShape(10.dp)).background(Mc.Bg)
             .border(1.dp, Mc.Border, RoundedCornerShape(10.dp)).verticalScroll(rememberScrollState()).padding(10.dp))

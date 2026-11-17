@@ -2,7 +2,8 @@
 # through UI Automation, the only way the app accepts an Allow on its card-only asks. Stage 11a-1 spike.
 #
 #   mc-appcard.ps1 -List
-#   mc-appcard.ps1 -Answer <requestId> -Decision allow|deny [-ExpectTitle <t>] [-Tool <t>] [-DumpTree <file>]
+#   mc-appcard.ps1 -Answer <requestId> -Decision allow|deny [-ExpectTitle <t> | -ExpectTitleEnv] [-Tool <t>] [-DumpTree <file>]
+#   (-ExpectTitleEnv: the title is in env MC_EXPECT_TITLE; mc-pc uses this, so no title text is ever an argument)
 #   mc-appcard.ps1 -Answer <requestId> -DumpTree <file>            (dump only, no click)
 #   mc-appcard.ps1 -WaitNext [-Tool <t>] [-WaitTimeout 300] [-Decision allow|deny ...]
 #                                                                  (waits for the next new card; answers it if -Decision)
@@ -24,6 +25,7 @@ param(
     [string]$Answer = '',
     [ValidateSet('', 'allow', 'deny')][string]$Decision = '',
     [string]$ExpectTitle = '',
+    [switch]$ExpectTitleEnv,
     [string]$Tool = '',
     [string]$DumpTree = '',
     [switch]$WaitNext,
@@ -49,6 +51,9 @@ function Invoke-Helper([string[]]$a) {
 }
 
 if (-not $py) { Out-Result @{ ok = $false; reason = 'python not found' } 2 }
+if ($ExpectTitleEnv) { $ExpectTitle = "$env:MC_EXPECT_TITLE"; if (-not $ExpectTitle.Trim()) { Out-Result @{ ok = $false; reason = 'MC_EXPECT_TITLE is empty' } 2 } }
+# The title goes to the helper in env (it is text from the app's session list; never an argument).
+$env:MC_EXPECT_TITLE = $ExpectTitle
 if ($List) { Invoke-Helper @('list') | ConvertTo-Json -Compress -Depth 6; exit 0 }
 
 if ($WaitNext) {
@@ -69,7 +74,7 @@ if (-not $Decision -and -not $DumpTree) { Out-Result @{ ok = $false; reason = 'n
 
 # 1. The log must say this card is still open and may be answered.
 $ca = @('check', $Answer)
-if ($ExpectTitle) { $ca += @('--expect-title', $ExpectTitle) }
+if ($ExpectTitle) { $ca += '--expect-title-env' }
 if ($Tool) { $ca += @('--tool', $Tool) }
 $chk = Invoke-Helper $ca
 $card = $chk.card
@@ -232,7 +237,7 @@ if ($urlNow -notmatch "/epitaxy/$([regex]::Escape($card.session))(?:[/?#]|$)") {
 # The card name is screen text: it goes to the helper in an env var, never as an argument.
 $env:MC_CARD_NAME = $nameNow
 $ra = @('check', $Answer, '--card-name-env')
-if ($ExpectTitle) { $ra += @('--expect-title', $ExpectTitle) }
+if ($ExpectTitle) { $ra += '--expect-title-env' }
 if ($Tool) { $ra += @('--tool', $Tool) }
 $ra += @('--since', "$off0")
 $re = Invoke-Helper $ra
