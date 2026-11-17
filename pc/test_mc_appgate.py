@@ -161,6 +161,12 @@ class Answer(unittest.TestCase):
         r, calls = self.a(item(at=1100.0 - 8 * 3600 - 5))
         self.assertEqual((r["state"], calls), ("expired", []))
 
+    def test_parse_result_wrapped_and_noisy(self):
+        nl = chr(13) + chr(10)
+        self.assertEqual(g.parse_result('{"ok":true,"method":"inv' + nl + 'oke"}'), {"ok": True, "method": "invoke"})
+        self.assertEqual(g.parse_result('warning x' + nl + '{"ok":false,"reason":"r"}'), {"ok": False, "reason": "r"})
+        self.assertEqual(g.parse_result("garbage"), {})
+
     def test_title_goes_in_env_not_argv(self):
         captured = {}
 

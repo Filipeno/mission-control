@@ -135,6 +135,19 @@ def decide(item: dict, now: float, locked, state_of) -> tuple:
     return "run", ""
 
 
+def parse_result(text: str) -> dict:
+    """The JSON object mc-appcard.ps1 printed. The console may wrap it over several lines, so lines are joined first."""
+    flat = "".join(text.splitlines())
+    a, b = flat.find("{"), flat.rfind("}")
+    if a < 0 or b < a:
+        return {}
+    try:
+        res = json.loads(flat[a:b + 1])
+    except ValueError:
+        return {}
+    return res if isinstance(res, dict) else {}
+
+
 def run_answer(item: dict) -> tuple:
     """Runs mc-appcard.ps1 for this answer: (exit code, result dict)."""
     env = dict(os.environ, MC_EXPECT_TITLE=str(item["title"]))
@@ -146,13 +159,10 @@ def run_answer(item: dict) -> tuple:
     except subprocess.TimeoutExpired:
         return 99, {"reason": "mc-appcard.ps1 timed out"}
     text = r.stdout.decode("utf-8", "replace").strip()
-    res = {}
-    for line in reversed(text.splitlines()):
-        try:
-            res = json.loads(line)
-            break
-        except ValueError:
-            continue
+    res = parse_result(text)
+    if not res and r.returncode == 0:
+        # mc-appcard.ps1 exits 0 only after main.log shows the app's own "Received permission response" for this card.
+        res = {"ok": True, "reason": "clicked (result text unreadable, exit 0)"}
     if not res:
         res = {"reason": (text or r.stderr.decode("utf-8", "replace"))[-300:] or "no output"}
     return r.returncode, res
