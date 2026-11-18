@@ -32,7 +32,7 @@ fun McTheme(content: @Composable () -> Unit) {
             background = Mc.Bg, onBackground = Mc.Text,
             surface = Mc.Card, onSurface = Mc.Text,
             surfaceVariant = Mc.Card, onSurfaceVariant = Mc.Muted,
-            outline = Mc.Border, tertiary = Mc.Warn,
+            outline = Mc.NavIdle, tertiary = Mc.Warn,
         ),
         content = content,
     )

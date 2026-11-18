@@ -376,7 +376,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
             if (desktop) Row(Modifier.fillMaxWidth().background(Mc.Bg).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("Message Claude…", maxLines = 1) },
-                    maxLines = 5, shape = RoundedCornerShape(14.dp), textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp),
+                    maxLines = 5, shape = RoundedCornerShape(14.dp), textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp),
                     modifier = Modifier.weight(1f))
                 IconButton(onClick = {
                     runCatching { speech.launch(Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)

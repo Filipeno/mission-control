@@ -58,7 +58,7 @@ internal fun AppCardGate(g: JSONObject, busy: Boolean, onAllow: () -> Unit, onDe
                 modifier = Modifier.padding(top = 6.dp))
             val meta = listOf(inp.optString("cwd").ifBlank { inp.optString("folder") }, inp.optString("model"), inp.optString("effort"),
                 inp.optString("context"), inp.optString("initiation")).filter { it.isNotBlank() }
-            if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Mc.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            if (meta.isNotEmpty()) Text(meta.joinToString(" · "), color = Mc.Muted, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
             CodeBox(inp.optString("prompt").ifBlank { inp.toString(2) })
         } else if (inp.length() > 0) CodeBox(inp.toString(2))
         if (!g.optBoolean("input_found", true)) Text("The request's details were not found in the session's transcript: check the screenshot or the PC.",
@@ -88,7 +88,7 @@ internal fun AppCardGate(g: JSONObject, busy: Boolean, onAllow: () -> Unit, onDe
             PrimaryButton("Allow once", Modifier.weight(1.5f), onClick = onAllow)
             DarkBtn("Deny", Modifier.weight(1f), Mc.Bad, onClick = onDeny)
         }
-        Text("The PC clicks the card for you. If it is locked, the answer waits for unlock (up to 8 h).", color = Mc.Muted, fontSize = 12.sp,
+        Text("The PC clicks the card for you. If it is locked, the answer waits for unlock (up to 8 h).", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(top = 6.dp))
     }
 }

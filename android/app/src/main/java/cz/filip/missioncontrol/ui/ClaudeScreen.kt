@@ -307,7 +307,7 @@ private fun HelperQuestionCard(q: JSONObject, onSend: (String) -> Unit) {
             Text("Last try failed: $it", color = Mc.Bad, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
         }
         if (state == "open") {
-            OutlinedTextField(value = text, onValueChange = { if (it.length <= 1000) text = it }, minLines = 2, placeholder = { Text("Your answer") },
+            OutlinedTextField(value = text, onValueChange = { if (it.length <= 1000) text = it }, minLines = 2, placeholder = { Text("Your answer") }, supportingText = { Text("Max 1000 characters") },
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
             Button(onClick = { onSend(text.trim()); text = "" }, enabled = text.isNotBlank(), shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(46.dp),

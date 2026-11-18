@@ -245,7 +245,7 @@ private fun PcCard(d: JSONObject, busy: Boolean, pending: String?, onWake: () ->
             ) { Text("Sleep", fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
         }
         if (online && !pc.optBoolean("helper")) {
-            Text("Sleep needs the PC helper (mc-pc), which is not reporting.", color = Mc.Muted, fontSize = 12.sp,
+            Text("Sleep needs the PC helper (mc-pc), which is not reporting.", color = Mc.Muted, fontSize = 14.sp,
                 modifier = Modifier.padding(top = 6.dp))
         }
     }

@@ -232,8 +232,9 @@ private fun DocRows(docs: List<JSONObject>, onOpen: (String) -> Unit) {
 }
 
 @Composable
+/** Fill starts at 8% so an empty bar does not look broken; the "X of Y done" text is the real number. */
 private fun Progress(done: Int, total: Int) =
-    LinearProgressIndicator(progress = { if (total == 0) 0f else done.toFloat() / total }, color = Mc.Accent, trackColor = Mc.ButtonDark,
+    LinearProgressIndicator(progress = { if (total == 0) 0f else maxOf(done.toFloat() / total, 0.08f).coerceAtMost(1f) }, color = Mc.Accent, trackColor = Mc.ButtonDark,
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(8.dp).clip(RoundedCornerShape(4.dp)))
 
 /** A checklist or doc on its own screen (the to-do tab opens the checklist attached to an item with it). */
