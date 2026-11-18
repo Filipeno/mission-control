@@ -8,7 +8,7 @@ DEST=/home/filip/mission-control
 cd "$(dirname "$0")"
 
 echo "== copy files to $HOST:$DEST"
-tar -cf - mcpi.py claude_hub.py sessions_hub.py docs_hub.py todo_hub.py system_hub.py health_hub.py ai_hub.py p256.py requirements.txt mission-control.service mc-pi.env.example \
+tar -cf - mcpi.py claude_hub.py sessions_hub.py docs_hub.py todo_hub.py system_hub.py health_hub.py localai_hub.py ai_hub.py p256.py requirements.txt mission-control.service mc-pi.env.example \
   | ssh "$HOST" "mkdir -p $DEST && tar -xf - -C $DEST"
 
 echo "== venv + packages, env file, systemd unit"

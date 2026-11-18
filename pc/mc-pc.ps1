@@ -1,11 +1,12 @@
 # mc-pc: Mission Control's PC helper (Windows PowerShell 5.1).
 #  - every 5 s : asks mc-pi for commands (sleep) and for Filip's answers and ideas; writes them into D:\ai-hub
 #  - every 15 s: sends a report: hub status-log tails, HANDOFF summary, pending approvals (+ pictures), parked AIs
+#  - every ~5 s while the phone shows the Local AI card (or a PC mode switch runs): Local AI snapshot (mc_localai.py)
 #  - every 10 min: usage numbers for Claude, Codex, Gemini, Antigravity
 # Logins of Codex and Antigravity are read where their CLIs keep them, used in memory for one read-only
 # usage call, and never sent or saved. Only numbers leave the PC.
 # Config: mc-pc.json next to this file (git-ignored). Started by Task Scheduler (install-mc-pc.ps1).
-param([switch]$Test, [switch]$TestRestart)   # -Test: print usage + report parts once and exit (nothing is sent)
+param([switch]$Test, [switch]$TestRestart, [switch]$TestLocalAi)   # -Test: print usage + report parts once and exit (nothing is sent)
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $here 'mc-pc.log'
@@ -327,6 +328,10 @@ function Handle-Item($it) {
     $date = (Get-Date -Format 'yyyy-MM-dd HH:mm')
     if ($it.kind -eq 'claude-restart') {
         $r = Restart-ClaudeApp; Send-Result $it.key ([bool]$r.ok) $r.detail
+    } elseif ($it.kind -eq 'pc-mode') {
+        Start-ModeSwitch $it
+    } elseif ($it.kind -eq 'localai-report') {
+        try { Send-LocalAiReport $it } catch { Send-Result $it.key $false $_.Exception.Message }
     } elseif ($it.kind -eq 'rc-queue') {
         $py = (Get-Command python -ErrorAction SilentlyContinue).Source
         if (-not $py) { Send-Result $it.key $false 'python not found on the PC'; return }
@@ -503,6 +508,82 @@ function Send-CardShots {
 }
 
 $script:sessionsAt = [datetime]::MinValue
+# ------------------------------------------------------------------ PC mode + Local AI card (0.15)
+
+$script:modeJob = $null      # the pc-mode.ps1 run started from the phone: @{ key; proc; out; mode; model; started }
+$script:nextLocalAi = Get-Date
+function Get-PythonExe { (Get-Command python -ErrorAction SilentlyContinue).Source }
+
+function Get-PcModeReport {
+    # pc-mode.json through mc_localai.py (it converts the local `since` time to unix seconds). $null when unreadable.
+    try {
+        $py = Get-PythonExe; if (-not $py) { return $null }
+        $m = (& $py -I (Join-Path $here 'mc_localai.py') mode 2>$null | Out-String) | ConvertFrom-Json
+        if ($m.mode) { return $m }
+    } catch { }
+    $null
+}
+
+function Get-LocalAiJson {
+    $py = Get-PythonExe; if (-not $py) { return $null }
+    $text = (& $py -I (Join-Path $here 'mc_localai.py') 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0 -or -not $text.Trim()) { return $null }
+    $text
+}
+
+function Send-LocalAi {
+    $text = Get-LocalAiJson
+    if (-not $text) { return }
+    Api 'Post' '/api/pc/localai' ([byte[]]$utf8.GetBytes($text)) | Out-Null
+}
+
+function Start-ModeSwitch($it) {
+    # pc-mode.ps1 takes ~60 s for AI (and may wait up to 240 s for its own mutex): start it hidden and poll it
+    # from the main loop instead of blocking here. Only fixed values reach the command line.
+    $mode = "$($it.mode)"; $model = "$($it.model)"
+    if (@('normal', 'ai', 'gaming') -notcontains $mode -or @('', 'qwen', 'gptoss') -notcontains $model) { Send-Result $it.key $false 'bad mode request'; return }
+    if ($mode -ne 'ai') { $model = '' }
+    if ($script:modeJob -and -not $script:modeJob.proc.HasExited) { Send-Result $it.key $false 'a switch is already running'; return }
+    $modeScript = Join-Path $Hub 'bin\pc-mode.ps1'
+    if (-not (Test-Path -LiteralPath $modeScript)) { Send-Result $it.key $false 'pc-mode.ps1 not found'; return }
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
+    $out = Join-Path $env:TEMP "mc-pc-mode-$([int](Unix (Get-Date))).txt"
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$modeScript`"", '-Mode', $mode)
+    if ($model) { $a += @('-Model', $model) }
+    $a += '-Quiet'
+    $p = Start-Process -FilePath $shell -ArgumentList $a -WindowStyle Hidden -PassThru -RedirectStandardOutput $out
+    $null = $p.Handle      # keeps the exit code readable after the process ends
+    $script:modeJob = @{ key = $it.key; proc = $p; out = $out; mode = $mode; model = $model; started = Get-Date }
+    Write-Log "pc-mode $mode $model started from the phone (pid $($p.Id))"
+}
+
+function Check-ModeJob {
+    $j = $script:modeJob
+    if (-not $j) { return }
+    if (-not $j.proc.HasExited) {
+        if (((Get-Date) - $j.started).TotalSeconds -gt 420) { Write-Log 'pc-mode run took over 7 min: giving up waiting'; Stop-Process -Id $j.proc.Id -Force -ErrorAction SilentlyContinue; Send-Result $j.key $false 'timed out'; $script:modeJob = $null }
+        return
+    }
+    $code = $j.proc.ExitCode
+    $text = ''; try { $text = (Get-Content -LiteralPath $j.out -Raw -ErrorAction SilentlyContinue) } catch { }
+    Remove-Item -LiteralPath $j.out -ErrorAction SilentlyContinue
+    $script:modeJob = $null
+    Write-Log "pc-mode $($j.mode) finished, exit $code"
+    # the real mode state first (the Pi shows it at once), then the result
+    try { Send-LocalAi } catch { Write-Log "localai: $($_.Exception.Message)" }
+    $detail = if ($code -eq 0) { "mode=$($j.mode)" } else { "exit $code $(("$text").Trim())" }
+    if ($detail.Length -gt 180) { $detail = $detail.Substring(0, 180) }
+    Send-Result $j.key ($code -eq 0) $detail
+}
+
+function Send-LocalAiReport($it) {
+    $file = Join-Path $Hub 'files\local-agent-trials\report.md'
+    if (-not (Test-Path -LiteralPath $file)) { Send-Result $it.key $false 'report.md does not exist'; return }
+    $text = [IO.File]::ReadAllText($file, $utf8)
+    $r = Api 'Post' '/api/pc/docs/upload' @{ kind = 'doc'; name = 'local-agent-trials-report.md'; text = $text; source = $file; title = 'Local agent trials report' }
+    Send-Result $it.key $true "$($r.slug)"
+}
+
 function Send-Sessions($watch) {
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $py) { return }
@@ -849,6 +930,7 @@ if ($Test) {
     ConvertTo-Json @{ parked = Get-Parked; logs = @((Tail-Logs).Keys); handoff_chars = (Handoff-Summary).Length } -Depth 4
     exit
 }
+if ($TestLocalAi) { Get-LocalAiJson; exit }
 if ($TestRestart) { Restart-ClaudeApp -DryRun | ConvertTo-Json -Compress; exit }
 $mutex = New-Object System.Threading.Mutex($false, 'Global\mission-control-mc-pc')
 if (-not $mutex.WaitOne(0)) { exit }   # already running
@@ -871,12 +953,17 @@ while ($true) {
         if ($done.Count) { Api 'Post' '/api/pc/ack' @{ keys = $done } | Out-Null; $nextUsage = Get-Date }
         if ($reply.digest) { try { Send-Digest } catch { Write-Log "digest: $($_.Exception.Message)" } }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
+        try { Check-ModeJob } catch { Write-Log "pc-mode job: $($_.Exception.Message)" }
+        if ($reply.ai_watch -and (Get-Date) -ge $script:nextLocalAi) {
+            try { Send-LocalAi } catch { Write-Log "localai: $($_.Exception.Message)" }
+            $script:nextLocalAi = (Get-Date).AddSeconds(4)
+        }
         try { Send-CardShots } catch { Write-Log "appcard screenshot: $($_.Exception.Message)" }
         try { Sync-Plans } catch { Write-Log "plans sync: $($_.Exception.Message)" }
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
-                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions) } | Out-Null
+                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions); pcmode = (Get-PcModeReport) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }
@@ -898,5 +985,5 @@ while ($true) {
         if ($_.ErrorDetails.Message) { $msg += ' ' + $_.ErrorDetails.Message.Substring(0, [Math]::Min(300, $_.ErrorDetails.Message.Length)) }
         if ($msg -ne $lastError) { Write-Log "error: $msg"; $lastError = $msg }
     }
-    Start-Sleep -Milliseconds $(if ($reply.watch) { 1000 } else { 4000 })   # faster while the phone has a session open
+    Start-Sleep -Milliseconds $(if ($reply.watch -or $reply.ai_watch -or $script:modeJob) { 1000 } else { 4000 })   # faster while the phone has a session or the Local AI card open
 }

@@ -86,6 +86,7 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     var waitingShot by remember { mutableStateOf(false) }
     var full by remember { mutableStateOf(false) }
     var moreTimeline by remember { mutableStateOf(false) }
+    var reportSlug by remember { mutableStateOf<String?>(null) }
 
     suspend fun loadShot() {
         shot = withContext(Dispatchers.IO) {
@@ -110,7 +111,8 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     }
 
     LifecycleResumeEffect(Unit) { resumed = true; onPauseOrDispose { resumed = false } }
-    LaunchedEffect(resumed) { while (resumed) { load(); delay(if (waitingShot) 2000 else 10_000) } }
+    val switching = data?.optJSONObject("pc_mode")?.optJSONObject("switch")?.optString("state") == "requested"
+    LaunchedEffect(resumed, switching) { while (resumed) { load(); delay(if (waitingShot || switching) 2000 else 10_000) } }
     LaunchedEffect(waitingShot) { if (waitingShot) { delay(40_000); waitingShot = false } }
 
     fun requestShot() {
@@ -125,6 +127,8 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
             }
         }
     }
+
+    reportSlug?.let { slug -> DocDetailScreen(slug, onBack = { reportSlug = null }, modifier = modifier); return }
 
     PullToRefreshBox(
         isRefreshing = refreshing,
@@ -157,7 +161,17 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                 if (error == null) Text("Loading…", color = Mc.Muted)
                 return@Column
             }
-            PcCard(d, shot, shotAt, waitingShot, onShot = ::requestShot, onOpen = { full = true })
+            PcCard(d, shot, shotAt, waitingShot, onShot = ::requestShot, onOpen = { full = true }, onMode = { mode, model ->
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/pc-mode", JSONObject().put("mode", mode).put("model", model)) }
+                        load()
+                    } catch (e: ApiError) {
+                        Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            })
+            LocalAiCard(active = resumed, onOpenReport = { reportSlug = it }, onLoggedOut = onLoggedOut)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PiTile(d.optJSONObject("pi"), Modifier.weight(1f))
                 MiniTile(d.optJSONObject("mini_pc"), Modifier.weight(1f))
@@ -312,7 +326,8 @@ private fun SelfTestCard(selftest: JSONObject?) {
 }
 
 @Composable
-private fun PcCard(d: JSONObject, shot: ImageBitmap?, shotAt: Double, waiting: Boolean, onShot: () -> Unit, onOpen: () -> Unit) {
+private fun PcCard(d: JSONObject, shot: ImageBitmap?, shotAt: Double, waiting: Boolean, onShot: () -> Unit, onOpen: () -> Unit,
+                   onMode: (String, String) -> Unit) {
     val pc = d.optJSONObject("pc") ?: JSONObject()
     McCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -349,6 +364,7 @@ private fun PcCard(d: JSONObject, shot: ImageBitmap?, shotAt: Double, waiting: B
                 t("ram_pct")?.let { "RAM ${it.toInt()}%" }).joinToString(" · ") + " load" else "Asleep, no live temps",
             color = Mc.Muted, fontSize = 13.sp,
         )
+        PcModeSwitch(d.optJSONObject("pc_mode"), onMode)
     }
 }
 

@@ -39,6 +39,7 @@ from docs_hub import DocsHub
 from todo_hub import TodoHub
 from system_hub import SystemHub
 from health_hub import HealthHub
+from localai_hub import LocalAiHub
 from ai_hub import AiHub
 
 HERE = Path(__file__).resolve().parent
@@ -421,6 +422,7 @@ class AppState:
         self.todos = TodoHub(STATE)
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
         self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
+        self.localai = LocalAiHub(self.claude)
         self.ai = AiHub(load_json, save_json, self.deliver, self.claude, self.todos, self.docs,
                         lambda: self.settings, lambda: in_quiet(self.settings, datetime.now()))
 
@@ -720,6 +722,8 @@ def make_app(state: AppState):
         out = {"inbox": state.claude.pc_inbox(), "watch": state.sessions.pc_watch()}
         if state.ai.want_digest():
             out["digest"] = True
+        if state.localai.watching():
+            out["ai_watch"] = True
         if state.system.take_shot_request():
             out["screenshot"] = True
         if state.sleep_cmd_at and time.time() - state.sleep_cmd_at < SLEEP_CMD_TTL:
@@ -740,6 +744,7 @@ def make_app(state: AppState):
         state.helper_at = time.time()
         state.system.on_pc_report(d.get("stats"))
         state.health.on_pc_report(d.get("health"))
+        state.localai.on_mode(d.get("pcmode"))
         state.ai.on_pc_questions(d.get("questions"))
         for a in state.claude.on_report(d):
             state.deliver({"at": time.time(), "kind": "approval", "cat": "claude",
@@ -837,6 +842,7 @@ def make_app(state: AppState):
         state.sessions.on_result(d)
         state.health.on_result(d)
         state.ai.on_result(d)
+        state.localai.on_result(d)
         return {"ok": True}
 
     def with_plan_info(gates):
@@ -1288,8 +1294,45 @@ def make_app(state: AppState):
         v = state.system.view()
         h = state.health.view()
         v.update({k: h[k] for k in ("claude_app", "selftest")})
+        v["pc_mode"] = state.localai.mode_view()
         v["problems"] = v.get("problems", []) + h["problems_add"]
         return v
+
+    # ------------------------------------------------------------ PC mode + Local AI card (0.15)
+    @app.post("/api/pc/localai")
+    def pc_localai(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        state.helper_at = time.time()
+        state.localai.on_snapshot(d)
+        return {"ok": True}
+
+    @app.get("/api/system/localai")
+    def system_localai(req: Request):
+        need_app(req)
+        v = state.localai.view()
+        v["pc_online"] = time.time() - state.helper_at < HELPER_STALE
+        return v
+
+    @app.post("/api/system/pc-mode")
+    def system_pc_mode(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        if time.time() - state.helper_at > HELPER_STALE:
+            raise HTTPException(409, "PC helper not connected (is the PC on?)")
+        try:
+            started = state.localai.request_mode(d.get("mode"), d.get("model") or "")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        return {"ok": True, "started": started}
+
+    @app.post("/api/system/localai/report")
+    def system_localai_report(req: Request):
+        need_app(req)
+        if time.time() - state.helper_at > HELPER_STALE:
+            raise HTTPException(409, "PC helper not connected (is the PC on?)")
+        state.localai.request_report()
+        return {"ok": True}
 
     @app.post("/api/system/claude/restart")
     def system_claude_restart(req: Request):
