@@ -99,6 +99,14 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/mc_widget_info" />
         </receiver>
 
+        <!-- Session widget (stage 11e): one Claude session, Allow / Deny. -->
+        <receiver android:name=".widget.SessionWidgetReceiver" android:exported="true" android:label="Claude session">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/mc_session_widget_info" />
+        </receiver>
+
         <!-- Buttons inside notifications (e.g. "Stay awake 60 min"). -->
         <receiver android:name=".push.ActionReceiver" android:exported="false" />
     </application>

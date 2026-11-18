@@ -23,9 +23,11 @@ import time
 SID_RE = re.compile(r"^[0-9a-f-]{36}$")
 GID_RE = re.compile(r"^(?:[0-9]{8}-[0-9]{6}-[0-9a-f]{4}|ac-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 CARD_PREFIX = "ac-"
-SHOT_MAX = 12           # app card screenshots kept in memory (never written to disk)
+SHOT_MAX = 12           # card screenshots kept in memory (never written to disk)
+SHOT_GRACE = 60         # a screenshot may arrive a moment before the snapshot that lists its card
 KEY_RE = re.compile(r"^(task_[0-9a-f]{6,}|offer-[A-Za-z0-9_-]{4,20})$")
 WATCH_TTL = 30          # mc-pc sends activity of the open session while the phone asked within this time
+SHOT_BYTES = 300 * 1024   # a card screenshot is a small JPEG
 FRESH = 30              # a snapshot older than this = PC helper not reporting
 AUTO = ("none", "readonly")
 # The boss session: the main Claude Desktop session of Filip's AI team. A side session (one a boss started for a
@@ -46,7 +48,7 @@ class SessionsHub:
         self.hidden = set(self.load("proposals-hidden.json", []))
         self.config = self.load("gate-config.json", {"auto": "readonly", "enabled": True})
         self.card_answers = {}                      # app card gate id -> queue key of Filip's answer (its result = card status)
-        self.card_shots = {}                        # app card gate id -> (jpeg bytes, at)
+        self.card_shots = {}                        # gate id -> (jpeg bytes or b"" when the PC was locked, at); any gate kind (11e)
 
     # ------------------------------------------------------------ from mc-pc
 
@@ -69,6 +71,9 @@ class SessionsHub:
                     self.seen.add(p["key"])
                     notify.append(("proposal", p))
             self.snap = {"sessions": sessions, "gates": gates, "proposals": props, "at": time.time()}
+            live = {g["id"] for g in gates}          # a screenshot lives only as long as its card (answered / expired = gone)
+            for k in [k for k, v in self.card_shots.items() if k not in live and time.time() - v[1] > SHOT_GRACE]:
+                del self.card_shots[k]
             w = d.get("watch")
             if isinstance(w, dict) and SID_RE.match(str(w.get("id", ""))):
                 self.rows[w["id"]] = {"rows": [_clean_row(r) for r in (w.get("rows") or [])[-100:] if isinstance(r, dict)],
@@ -147,7 +152,11 @@ class SessionsHub:
             raise ValueError("bad answer")
         if gid.startswith(CARD_PREFIX):
             return self._answer_card(token_hash, gid, decision, payload, d)
-        self._verify(token_hash, f"gate|{gid}|{decision}|{payload}", d)
+        with self.lock:
+            peek = next((x for x in self.snap["gates"] if x["id"] == gid), None)
+        # A plain permission Deny without a note needs no fingerprint (stage 11e widget: Deny is one tap, like on app cards).
+        if not (decision == "deny" and not payload and not d.get("sig") and peek and peek["kind"] == "permission"):
+            self._verify(token_hash, f"gate|{gid}|{decision}|{payload}", d)
         with self.lock:
             g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
             if not g:
@@ -200,10 +209,13 @@ class SessionsHub:
         r = self.results.get(self.card_answers.get(gid, ""))
         return {"decision": r["text"], "ok": r["ok"], "detail": r["detail"], "at": r["at"]} if r else None
 
-    def save_card_shot(self, gid: str, data: bytes) -> None:
-        if not GID_RE.match(gid) or not gid.startswith(CARD_PREFIX):
-            raise ValueError("bad app card id")
-        if not data.startswith(b"\xff\xd8") or len(data) > 4 * 1024 * 1024:
+    def save_card_shot(self, gid: str, data: bytes, locked: bool = False) -> None:
+        """A PC screenshot for a card (any gate kind). locked=True: the PC was locked, no picture was taken."""
+        if not GID_RE.match(gid):
+            raise ValueError("bad card id")
+        if locked:
+            data = b""
+        elif data[:2] != bytes((255, 216)) or len(data) > SHOT_BYTES:
             raise ValueError("not a JPEG (or too big)")
         with self.lock:
             self.card_shots[gid] = (data, time.time())
@@ -213,7 +225,26 @@ class SessionsHub:
     def card_shot(self, gid: str):
         with self.lock:
             x = self.card_shots.get(gid)
-            return x[0] if x else None
+            return x[0] if x and x[0] else None
+
+    def widget_session(self, pin: str = "") :
+        """The session the home-screen widget shows: the pinned one, else one that asks, else the latest. None when none."""
+        with self.lock:
+            sess, gates = self.snap["sessions"], self.snap["gates"]
+            if not sess or time.time() - self.snap["at"] > FRESH:
+                return None
+            asking = {g["session_id"] for g in gates}
+            pick = next((s for s in sess if pin and s["id"] == pin), None)
+            pinned = pick is not None
+            if pick is None:
+                pick = next((s for s in sorted(sess, key=lambda s: -s["updated"]) if s["id"] in asking), None)                     or max(sess, key=lambda s: s["updated"])
+            g = next((g for g in gates if g.get("session_id") == pick["id"] and g["kind"] in ("permission", "appcard")), None)
+            q = next((g for g in gates if g.get("session_id") == pick["id"]), None)
+            state = "waiting" if q else pick["state"]
+            return {"id": pick["id"], "title": pick["title"], "last": pick["last"], "state": state, "pinned": pinned,
+                    "updated": pick["updated"],
+                    "gate": {"id": g["id"], "kind": g["kind"], "summary": g["summary"][:120]} if g else None,
+                    "asks": ({"kind": q["kind"], "summary": q["summary"][:120]} if q and not g else None)}
 
     def send_message(self, token_hash: str, sid: str, d: dict) -> dict:
         text = str(d.get("text") or "").strip()[:4000]
@@ -323,7 +354,9 @@ class SessionsHub:
     def _card_extras(self, g: dict) -> dict:
         if g.get("kind") == "appcard":
             g["answer"] = self.card_answer(g["id"])
-            g["has_shot"] = g["id"] in self.card_shots
+        sh = self.card_shots.get(g["id"])
+        g["has_shot"] = bool(sh and sh[0])
+        g["shot_locked"] = bool(sh and not sh[0])
         return g
 
     def _verify(self, token_hash: str, msg: str, d: dict) -> None:

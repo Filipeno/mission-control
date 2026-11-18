@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -132,6 +133,7 @@ fun stateChip(state: String): Pair<String, Color> = when (state) {
 }
 
 /** Claude sessions block of the Claude tab: requests on top, then the live sessions. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SessionList(s: JSONObject, onOpen: (String) -> Unit, onConfig: () -> Unit) {
     val sessions = s.optJSONArray("sessions").objs()
@@ -164,17 +166,25 @@ fun SessionList(s: JSONObject, onOpen: (String) -> Unit, onConfig: () -> Unit) {
     val sorted = sessions.sortedWith(compareBy<JSONObject>({ if (it.optString("id") in needs) 0 else when (it.optString("state")) { "waiting" -> 1; "working" -> 2; else -> 3 } },
         { -it.optDouble("updated", 0.0) }))
     var all by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    var pin by remember { mutableStateOf(cz.filip.missioncontrol.widget.SessionWidget.pin(ctx)) }
     val active = sorted.count { it.optString("id") in needs || it.optString("state") != "idle" }
     val shown = if (all) sorted else sorted.take(maxOf(active + 3, 5))
     Column {
         shown.forEachIndexed { i, x ->
             val (chip, color) = if (x.optString("id") in needs) "Asks you" to Mc.Warn else stateChip(x.optString("state"))
-            Row(Modifier.fillMaxWidth().clickable { onOpen(x.optString("id")) }.padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
+            val pinned = x.optString("id") == pin
+            Row(Modifier.fillMaxWidth().combinedClickable(onClick = { onOpen(x.optString("id")) }, onLongClick = {
+                // Long-press pins this session to the home-screen session widget (press again to unpin).
+                pin = if (pinned) "" else x.optString("id")
+                cz.filip.missioncontrol.widget.SessionWidget.setPin(ctx, pin)
+                Toast.makeText(ctx, if (pinned) "Unpinned from the widget" else "Pinned to the session widget", Toast.LENGTH_SHORT).show()
+            }).padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
                 Box(Modifier.padding(top = 6.dp).size(10.dp).clip(CircleShape).background(color))
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(x.optString("title"), color = Mc.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        Text((if (pinned) "📌 " else "") + x.optString("title"), color = Mc.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         Text(chip, color = if (color == Mc.Idle) Mc.Muted else color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clip(RoundedCornerShape(50)).background(Mc.ButtonDark).padding(horizontal = 10.dp, vertical = 4.dp))
@@ -575,6 +585,8 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
                 return parts.joinToString(", ")
             }
             val ready = qs.isNotEmpty() && qs.all { answerOf(it).isNotBlank() }
+            GateShot(g)
+            Spacer(Modifier.height(10.dp))
             if (busy) Text("Waiting for fingerprint…", color = Mc.Muted, fontSize = 14.sp)
             else PrimaryButton("Send answer", Modifier.fillMaxWidth(), enabled = ready) {
                 val a = JSONObject(); qs.forEach { a.put(it.optString("question"), answerOf(it)) }
@@ -604,6 +616,7 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
         Text("Folder: ${g.optString("cwd")}" + (g.optString("agent").takeIf { it.isNotBlank() }?.let { " · subagent $it" } ?: ""),
             color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
         if (g.optBoolean("truncated")) Text("Too long to show fully here: check it at the PC before allowing.", color = Mc.Warn, fontSize = 13.sp)
+        if (kind != "plan") GateShot(g)
         Spacer(Modifier.height(10.dp))
         var note by remember { mutableStateOf<String?>(null) }
         var askComments by remember { mutableStateOf(false) }

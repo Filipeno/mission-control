@@ -953,7 +953,7 @@ def make_app(state: AppState):
     async def pc_appcard_shot(req: Request, gid: str):
         need_pc(req)
         try:
-            state.sessions.save_card_shot(gid[:40], await req.body())
+            state.sessions.save_card_shot(gid[:40], await req.body(), locked=req.headers.get("x-pc-locked") == "1")
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True}
@@ -1438,7 +1438,7 @@ def make_app(state: AppState):
         return {"ok": True}
 
     @app.get("/api/widget")
-    def widget(req: Request):
+    def widget(req: Request, pin: str = ""):
         """Small summary for the home-screen widget."""
         need_app(req)
         try:
@@ -1454,7 +1454,7 @@ def make_app(state: AppState):
         lists = state.docs.summary()["checklists"]          # newest first
         cl = next((c for c in lists if not c.get("finished_at")), lists[0] if lists else None)
         return {"pc": {"online": bool(st.get("pc", {}).get("online")), "helper": time.time() - state.helper_at < HELPER_STALE},
-                "claude": {"working": working, "waiting": waiting}, "approvals": pend, "todos": state.todos.open_count(),
+                "claude": {"working": working, "waiting": waiting}, "approvals": pend, "session": state.sessions.widget_session(pin[:40]), "todos": state.todos.open_count(),
                 "checklist": ({"title": cl["title"], "done": cl["done"], "total": cl["total"], "failed": cl["failed"],
                                                     "finished": bool(cl.get("finished_at"))} if cl else None),
                 "now": time.time()}

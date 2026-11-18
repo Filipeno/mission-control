@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,22 +65,7 @@ internal fun AppCardGate(g: JSONObject, busy: Boolean, onAllow: () -> Unit, onDe
             color = Mc.Warn, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
         if (g.optBoolean("truncated")) Text("Too long to show fully here: check it at the PC before allowing.", color = Mc.Warn, fontSize = 13.sp)
 
-        // The PC screenshot from when the card appeared (tap to zoom).
-        var shot by remember(gid) { mutableStateOf<ImageBitmap?>(null) }
-        var full by remember { mutableStateOf(false) }
-        val hasShot = g.optBoolean("has_shot")
-        LaunchedEffect(gid, hasShot) {
-            if (hasShot && shot == null) shot = withContext(Dispatchers.IO) {
-                runCatching { Api.bytes(ctx, "/api/appcard/$gid/shot").let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }.getOrNull()
-            }
-        }
-        shot?.let { img ->
-            Image(img, "PC screenshot", Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(max = 220.dp).clip(RoundedCornerShape(10.dp))
-                .clickable { full = true }, contentScale = ContentScale.Fit)
-            Text("PC screen when the card appeared · tap to zoom", color = Mc.Muted, fontSize = 12.sp)
-            if (full) FullScreenShot(img) { full = false }
-        } ?: Text(if (hasShot) "Loading the PC screenshot…" else "No PC screenshot yet.", color = Mc.Muted, fontSize = 12.sp,
-            modifier = Modifier.padding(top = 6.dp))
+        GateShot(g)
         Spacer(Modifier.height(10.dp))
 
         val ans = g.optJSONObject("answer")
@@ -104,5 +90,31 @@ internal fun AppCardGate(g: JSONObject, busy: Boolean, onAllow: () -> Unit, onDe
         }
         Text("The PC clicks the card for you. If it is locked, the answer waits for unlock (up to 8 h).", color = Mc.Muted, fontSize = 12.sp,
             modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** The PC screenshot taken when a card appeared (any gate kind, stage 11e): a small thumbnail, tap for full screen.
+ *  A locked PC has no picture: it says so. Nothing is shown while the PC helper has not sent one yet. */
+@Composable
+fun GateShot(g: JSONObject) {
+    val ctx = LocalContext.current
+    val gid = g.optString("id")
+    var shot by remember(gid) { mutableStateOf<ImageBitmap?>(null) }
+    var full by remember { mutableStateOf(false) }
+    val hasShot = g.optBoolean("has_shot")
+    LaunchedEffect(gid, hasShot) {
+        if (hasShot && shot == null) shot = withContext(Dispatchers.IO) {
+            runCatching { Api.bytes(ctx, "/api/appcard/$gid/shot").let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }.getOrNull()
+        }
+    }
+    when {
+        shot != null -> Row(Modifier.padding(top = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Image(shot!!, "PC screenshot", Modifier.width(120.dp).heightIn(max = 80.dp).clip(RoundedCornerShape(8.dp))
+                .border(1.dp, Mc.Border, RoundedCornerShape(8.dp)).clickable { full = true }, contentScale = ContentScale.Crop)
+            Text("PC screen when this was asked · tap to open", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 10.dp))
+            if (full) FullScreenShot(shot!!) { full = false }
+        }
+        g.optBoolean("shot_locked") -> Text("PC locked: no screenshot taken.", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        hasShot -> Text("Loading the PC screenshot…", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
     }
 }

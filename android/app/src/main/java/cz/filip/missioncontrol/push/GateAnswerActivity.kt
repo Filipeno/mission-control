@@ -21,14 +21,16 @@ class GateAnswerActivity : FragmentActivity() {
         val summary = intent.getStringExtra("summary") ?: ""
         val notif = intent.getIntExtra("notif", 0)
         val app = applicationContext
-        if (intent.getStringExtra("gkind") == "appcard") {
-            // Claude app card: Deny is one tap, no fingerprint (the Pi takes an unsigned answer for an app card only as Deny).
-            if (decision != "deny") return finish()
+        val oneTapDeny = decision == "deny" && (intent.getStringExtra("gkind") == "appcard" || intent.getBooleanExtra("tap", false))
+        if (intent.getStringExtra("gkind") == "appcard" && decision != "deny" && !intent.getBooleanExtra("tap", false)) return finish()  // notification: no Allow for app cards
+        if (oneTapDeny) {
+            // Claude app card (or the session widget's Deny): one tap, no fingerprint (the Pi takes an unsigned answer only as Deny).
             app.getSystemService(NotificationManager::class.java).cancel(notif)
             toast("Deny sent to the PC")
             thread {
                 try {
                     Api.post(app, "/api/gate/$gate/answer", JSONObject().put("decision", "deny").put("payload", ""))
+                    cz.filip.missioncontrol.widget.SessionWidget.refresh(app)
                 } catch (e: Exception) {
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         Toast.makeText(app, "Not sent: ${e.message ?: "failed"}. Answer it in the app.", Toast.LENGTH_LONG).show()
@@ -51,6 +53,7 @@ class GateAnswerActivity : FragmentActivity() {
                     thread {
                         try {
                             Api.post(app, "/api/gate/$gate/answer", JSONObject().put("decision", decision).put("payload", "").put("ts", ts).put("sig", sig))
+                            cz.filip.missioncontrol.widget.SessionWidget.refresh(app)
                         } catch (e: Exception) {
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
                                 Toast.makeText(app, "Not sent: ${e.message ?: "failed"}. Answer it in the app.", Toast.LENGTH_LONG).show()

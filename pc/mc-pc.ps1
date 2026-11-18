@@ -495,17 +495,18 @@ function Answer-AppCard($it) {
 
 $script:cardShots = @{}
 function Send-CardShots {
-    # A fresh PC screenshot for every app card the phone has not got one for yet (mc-shot.py sends it, nothing is saved).
+    # A fresh PC screenshot for every approval / question / app card the phone has not got one for yet (mc-shot.py sends
+    # a small JPEG, or "PC locked" when the PC is locked; nothing is saved; the Pi drops it when the card is gone). Stage 11e.
     $snap = ReadJson (Join-Path $env:TEMP 'mc-sessions.json')
     if (-not $snap) { return }
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $py) { return }
-    foreach ($g in @($snap.gates | Where-Object { $_.kind -eq 'appcard' })) {
+    foreach ($g in @($snap.gates | Where-Object { $_.kind -in 'appcard', 'permission', 'question' })) {
         $id = "$($g.id)"
-        if ($id -notmatch '^ac-[0-9a-f-]{36}$' -or $script:cardShots[$id]) { continue }
+        if ($id -notmatch '^(ac-[0-9a-f-]{36}|[0-9]{8}-[0-9]{6}-[0-9a-f]{4})$' -or $script:cardShots[$id]) { continue }
         $script:cardShots[$id] = 1
-        $out = & $py -I (Join-Path $here 'mc-shot.py') --appcard $id 2>&1 | Out-String
-        Write-Log "appcard $id screenshot: $($out.Trim())"
+        $out = & $py -I (Join-Path $here 'mc-shot.py') --gate $id 2>&1 | Out-String
+        Write-Log "card $id screenshot: $($out.Trim())"
     }
 }
 

@@ -75,6 +75,13 @@ class EventService : Service() {
         if (worker == null) {
             running = true
             worker = Thread(::loop, "mc-events").apply { start() }
+            // The session widget shows working / waiting, which has no push event: redraw it every 15 s while one is on a home screen.
+            Thread {
+                while (running) {
+                    try { Thread.sleep(15_000) } catch (e: InterruptedException) { break }
+                    if (running && cz.filip.missioncontrol.widget.SessionWidget.active(this)) cz.filip.missioncontrol.widget.SessionWidget.refresh(this)
+                }
+            }.apply { isDaemon = true; name = "mc-widget-tick"; start() }
         }
         return START_STICKY
     }
@@ -121,7 +128,7 @@ class EventService : Service() {
                         Store.setLastPushAt(this, System.currentTimeMillis())
                         Notifs.show(this, events.getJSONObject(i))
                     }
-                    if (events.length() > 0) cz.filip.missioncontrol.widget.McWidget.refresh(this)
+                    if (events.length() > 0) { cz.filip.missioncontrol.widget.McWidget.refresh(this); cz.filip.missioncontrol.widget.SessionWidget.refresh(this) }
                     sp().edit().putLong("since", body.getLong("last")).apply()
                     status(if (local) "Connected (home)" else "Connected (tunnel)")
                     Store.setPushStatus(this, if (local) "Connected at home" else "Connected through the tunnel")
