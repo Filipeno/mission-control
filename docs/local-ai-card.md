@@ -7,7 +7,7 @@
 - **Report button.** Tap -> `POST /api/system/localai/report` -> PC item `localai-report` -> mc-pc uploads `report.md` as the doc `local-agent-trials-report` (one stable slug, so a changed file is a new version of the same doc, an unchanged one is no change/no notification) -> app opens it with the Docs viewer.
 
 ## Server speed (llama.cpp b12489)
-`/health` and `/slots` are on by default; `/metrics` needs `--metrics` and `start-llm.ps1` does not pass it. mc_localai therefore reads `/metrics` if present (`predicted_tokens_seconds`) and otherwise derives tokens/s from the decoded-token count of the busy slot between two samples (`next_token[0].n_decoded`, same `id_task`), and keeps the last value 30 s after generation ends. Suggestion (not done: `start-llm.ps1` is not ours): add `--metrics` for exact numbers incl. prompt speed.
+`/health` and `/slots` are on by default; `/metrics` needs `--metrics` and `start-llm.ps1` does not pass it. mc_localai therefore reads `/metrics` if present (`predicted_tokens_seconds`) and otherwise derives tokens/s from the decoded-token count of the busy slot between two samples (`next_token[0].n_decoded`, same `id_task`; field name checked against a live b12489 server on 2026-11-18), and keeps the last value 30 s after generation ends. Suggestion (not done: `start-llm.ps1` is not ours): add `--metrics` for exact numbers incl. prompt speed.
 
 ## Loop-agent status file (schema)
 `D:\ai-hub\state\local-agent\status.json`, written by the (future) loop agent, e.g. with `python -c "import mc_localai as m; m.write_status('task', 'step', 2, {'cmd':'pytest -q','ok':False,'at':'2026-11-18T05:10:00'})"` from `D:\projekty\mission-control\pc` (atomic write), or by hand:
