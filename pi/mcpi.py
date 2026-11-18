@@ -41,6 +41,7 @@ from system_hub import SystemHub
 from health_hub import HealthHub
 from localai_hub import LocalAiHub
 from ai_hub import AiHub
+from launch_hub import LaunchHub, MAX_UPLOAD
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("MC_PI_ENV", HERE / "mc-pi.env"))
@@ -419,6 +420,7 @@ class AppState:
         self.claude = ClaudeHub(STATE, load_json, save_json)
         self.sessions = SessionsHub(self.claude, load_json, save_json, self.deliver)
         self.docs = DocsHub(STATE)
+        self.launch = LaunchHub(self.claude, self.sessions, STATE, self.deliver)
         self.todos = TodoHub(STATE)
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
         self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
@@ -844,6 +846,63 @@ def make_app(state: AppState):
         state.ai.on_result(d)
         state.localai.on_result(d)
         return {"ok": True}
+
+    # ------------------------------------------------------------ starting work from the phone (stage 11c)
+    @app.post("/api/pc/folders")
+    def pc_folders(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        state.launch.on_folders(d)
+        return {"ok": True}
+
+    @app.get("/api/pc/launch/file/{uid}")
+    def pc_launch_file(req: Request, uid: str):
+        need_pc(req)
+        p = state.launch.file_path(uid)
+        if not p:
+            raise HTTPException(404, "no such file")
+        return FileResponse(p, media_type="application/octet-stream")
+
+    @app.post("/api/pc/launch/saved")
+    def pc_launch_saved(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        state.launch.on_saved(d)
+        return {"ok": True}
+
+    @app.get("/api/folders")
+    def folders(req: Request):
+        need_app(req)
+        v = state.launch.folders_view()
+        v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
+        return v
+
+    @app.post("/api/launch/upload")
+    async def launch_upload(req: Request, name: str = ""):
+        need_app(req)
+        try:
+            declared = int(req.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        chunks, n = [], 0
+        async for c in req.stream():                # the cap is checked while it arrives, not after
+            n += len(c)
+            if n > MAX_UPLOAD:
+                raise HTTPException(413, "file is over 25 MB")
+            chunks.append(c)
+        return sess_call(lambda: state.launch.upload(name, iter(chunks), declared or None))
+
+    @app.post("/api/sessions/new")
+    def session_new(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        r = sess_call(lambda: state.launch.new_session(_hash_token(bearer(req)), d))
+        state.system.log("claude", "New Claude session asked for from the phone")
+        return r
+
+    @app.post("/api/launch/skola")
+    def launch_skola(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        r = sess_call(lambda: state.launch.skola_start(_hash_token(bearer(req)), d))
+        state.system.log("claude", "School task photo sent from the phone")
+        return r
 
     def with_plan_info(gates):
         """A plan request carries how many open comments its Doc has (the card asks before approving over them)."""

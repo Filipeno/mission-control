@@ -286,6 +286,17 @@ class SessionsHub:
         r["boss"] = b["title"]
         return r
 
+    def type_to_boss(self, text: str, kind: str = "start", token_hash: str = "", msg: str = "", d: dict = None) -> dict:
+        """Stage 11c: types [text] into the boss session. With [msg] the phone's signature over it is checked first."""
+        if msg:
+            self._verify(token_hash, msg, d or {})
+        b = self.boss_session()
+        if not b:
+            raise LookupError("No main Claude Desktop session is open in D:\\projekty or D:\\ai-hub (or the PC is not reporting). Open one and try again.")
+        r = self._type(b["id"], text, kind)
+        r["boss"] = b["title"]
+        return r
+
     # ------------------------------------------------------------ helpers
 
     def _type(self, sid: str, text: str, kind: str) -> dict:

@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -110,6 +111,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     var live by remember { mutableStateOf<JSONObject?>(null) }       // /api/sessions
     var openSid by remember { mutableStateOf<String?>(null) }
     var gateConfig by remember { mutableStateOf(false) }
+    var newSheet by remember { mutableStateOf(false) }
     var answered by remember { mutableStateOf(setOf<String>()) }     // approvals answered on this phone, hidden at once
 
     suspend fun load() {
@@ -198,6 +200,9 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                     Box(Modifier.weight(1f)) { Header("Claude") }
                     val working = live?.optJSONArray("sessions").objects().count { it.optString("state") == "working" }
                     Chip("$working working", Mc.Accent, Mc.NavSelected, Modifier.padding(bottom = 8.dp))
+                    IconButton(onClick = { newSheet = true }, modifier = Modifier.padding(bottom = 2.dp)) {
+                        Icon(Icons.Filled.Add, contentDescription = "New session", tint = Mc.Accent)
+                    }
                     IconButton(onClick = onSettings, modifier = Modifier.padding(bottom = 2.dp)) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Mc.Muted)
                     }
@@ -248,6 +253,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
             dismissButton = { TextButton(onClick = { replyFor = null }) { Text("Cancel") } },
         )
     }
+    if (newSheet) NewSessionSheet { newSheet = false; scope.launch { load() } }
     if (gateConfig) GateConfigDialog(live?.optJSONObject("gate_config")?.optString("auto") ?: "none",
         live?.optBoolean("has_key") == true) { gateConfig = false; scope.launch { load() } }
     bigPicture?.let { (id, n) ->

@@ -377,6 +377,8 @@ function Handle-Item($it) {
         New-Item -ItemType Directory -Force "$Hub\gate" | Out-Null
         [IO.File]::WriteAllText("$Hub\gate\config.json", (ConvertTo-Json @{ auto = "$($it.auto)"; enabled = [bool]$it.enabled }), $utf8)
         Write-Log "gate config: auto=$($it.auto) enabled=$($it.enabled)"
+    } elseif ($it.kind -eq 'skola-new') {
+        Save-SkolaTask $it
     } elseif ($it.kind -eq 'message') {
         Send-Typed $it
     } elseif ($it.kind -eq 'idea') {
@@ -922,6 +924,43 @@ function Process-Mailboxes {
     }
 }
 
+# ------------------------------------------------------------------ starting work from the phone (stage 11c)
+
+function Get-PyJson($script, $arg, $envItem) {
+    $py = Get-PythonExe
+    if (-not $py) { throw 'python not found on the PC' }
+    if ($null -ne $envItem) { $env:MC_ITEM = ConvertTo-Json $envItem -Compress -Depth 5 }
+    try { (& $py -I (Join-Path $here $script) $arg 2>$null | Out-String) | ConvertFrom-Json } finally { Remove-Item Env:MC_ITEM -ErrorAction SilentlyContinue }
+}
+
+# The real sub-folders of D:\projekty and D:\Skola for the phone's "new session" sheet.
+$script:nextFolders = Get-Date
+function Send-Folders {
+    $f = Get-PyJson 'mc_launch.py' 'folders' $null
+    Api 'Post' '/api/pc/folders' @{ projects = @($f.projects); skola = @($f.skola) } | Out-Null
+}
+
+# A photo / PDF of an assignment: download the files from the Pi, save them under D:\Skola\<subject>\<new task>\podklady\,
+# tell the Pi (which then asks the boss session to start the Czech session). Always acked: a failure is reported, not retried.
+function Save-SkolaTask($it) {
+    $tmp = Join-Path $env:TEMP "mc-skola-$($it.key)"
+    try {
+        New-Item -ItemType Directory -Force $tmp | Out-Null
+        $files = @(); $i = 0
+        foreach ($f in @($it.files)) {
+            $i++
+            if ("$($f.id)" -notmatch '^[0-9a-f]{20}$') { throw 'bad file id' }
+            $p = Join-Path $tmp ("f$i.bin")
+            Invoke-WebRequest -Uri "$base/api/pc/launch/file/$($f.id)" -Headers $headers -OutFile $p -TimeoutSec 120 -UseBasicParsing
+            $files += @{ path = $p; name = "$($f.name)" }
+        }
+        $r = Get-PyJson 'mc_launch.py' 'skola-save' @{ key = "$($it.key)"; subject = "$($it.subject)"; files = $files }
+    } catch { $r = [pscustomobject]@{ ok = $false; detail = "PC could not save the files: $($_.Exception.Message)" } }
+    finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    Write-Log "skola task $($it.key) ($($it.subject)): ok=$($r.ok) $($r.task) $($r.detail)"
+    Api 'Post' '/api/pc/launch/saved' @{ key = "$($it.key)"; ok = [bool]$r.ok; detail = "$($r.detail)"; folder = "$($r.folder)"; task = "$($r.task)"; saved = @($r.saved) } | Out-Null
+}
+
 # ------------------------------------------------------------------ main loop
 
 if ($Test) {
@@ -959,6 +998,7 @@ while ($true) {
             $script:nextLocalAi = (Get-Date).AddSeconds(4)
         }
         try { Send-CardShots } catch { Write-Log "appcard screenshot: $($_.Exception.Message)" }
+        if ((Get-Date) -ge $script:nextFolders) { try { Send-Folders; $script:nextFolders = (Get-Date).AddMinutes(5) } catch { Write-Log "folders: $($_.Exception.Message)"; $script:nextFolders = (Get-Date).AddMinutes(1) } }
         try { Sync-Plans } catch { Write-Log "plans sync: $($_.Exception.Message)" }
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
