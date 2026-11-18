@@ -108,7 +108,7 @@ fun NewSessionSheet(onClose: () -> Unit) {
             Choice("Permission mode", PERMS, p.perm) { p = p.copy(perm = it) }
             if (p.perm == "bypassPermissions") Text("Bypass: the session runs every tool without asking you. Use it only for work you trust.", color = Mc.Bad, fontSize = 13.sp)
             Text("Your main session starts it, so it may cap model, effort and mode at its own level; then it raises them and asks you with a card.",
-                color = Mc.Muted, fontSize = 12.sp)
+                color = Mc.Muted, fontSize = 13.sp)
             OutlinedTextField(value = prompt, onValueChange = { if (it.length <= MAX_PROMPT) prompt = it }, label = { Text("First prompt") },
                 minLines = 4, maxLines = 10, modifier = Modifier.fillMaxWidth())
             Button(enabled = !busy && name.isNotBlank() && prompt.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),

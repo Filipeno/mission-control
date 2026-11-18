@@ -1,7 +1,24 @@
 package cz.filip.missioncontrol.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -40,6 +57,29 @@ fun McCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content
 @Composable
 fun Label(text: String, color: Color = Mc.Muted) =
     Text(text.uppercase(), color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.1.em)
+
+/** Label above a text field: the placeholder inside is only an example. */
+@Composable
+fun FieldLabel(text: String, modifier: Modifier = Modifier) =
+    Text(text, color = Mc.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = modifier.padding(top = 10.dp, bottom = 4.dp))
+
+/** Loading placeholder: pulsing grey cards, shown only if loading takes more than about a second. */
+@Composable
+fun SkeletonCards(count: Int = 3) {
+    var show by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { delay(1000); show = true }
+    if (!show) return
+    val a by rememberInfiniteTransition(label = "sk").animateFloat(0.4f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "sk")
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.alpha(a)) {
+        repeat(count) { i ->
+            McCard {
+                for (w in if (i % 2 == 0) listOf(0.4f, 0.7f, 0.5f) else listOf(0.5f, 0.6f)) {
+                    Box(Modifier.padding(vertical = 5.dp).fillMaxWidth(w).height(10.dp).clip(RoundedCornerShape(5.dp)).background(Mc.ButtonDark))
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun Header(title: String) {

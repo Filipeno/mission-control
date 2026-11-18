@@ -158,7 +158,7 @@ class ShareActivity : FragmentActivity() {
                     .background(if (sel) Mc.Accent else Mc.Card).clickable(enabled = !busy) { subject = sj }.padding(14.dp))
             }
             OutlinedTextField(value = note, onValueChange = { if (it.length <= 400) note = it }, label = { Text("Note (optional)") }, minLines = 2, modifier = Modifier.fillMaxWidth())
-            Text("Your main session starts a Czech homework session in that subject folder. The PC must be awake and unlocked.", color = Mc.Muted, fontSize = 12.sp)
+            Text("Your main session starts a Czech homework session in that subject folder. The PC must be awake and unlocked.", color = Mc.Muted, fontSize = 13.sp)
             Button(enabled = !busy && subject.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C)), onClick = {
                     busy = true

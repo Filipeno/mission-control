@@ -86,7 +86,7 @@ internal fun AppCardGate(g: JSONObject, busy: Boolean, onAllow: () -> Unit, onDe
         if (busy) Text("Waiting for fingerprint…", color = Mc.Muted, fontSize = 14.sp)
         else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PrimaryButton("Allow once", Modifier.weight(1.5f), onClick = onAllow)
-            DarkBtn("Deny", Modifier.weight(1f), Mc.Bad, onClick = onDeny)
+            DarkBtn("Deny", Modifier.weight(1f), outlined = true, onClick = onDeny)
         }
         Text("The PC clicks the card for you. If it is locked, the answer waits for unlock (up to 8 h).", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(top = 6.dp))
@@ -111,10 +111,10 @@ fun GateShot(g: JSONObject) {
         shot != null -> Row(Modifier.padding(top = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Image(shot!!, "PC screenshot", Modifier.width(120.dp).heightIn(max = 80.dp).clip(RoundedCornerShape(8.dp))
                 .border(1.dp, Mc.Border, RoundedCornerShape(8.dp)).clickable { full = true }, contentScale = ContentScale.Crop)
-            Text("PC screen when this was asked · tap to open", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(start = 10.dp))
+            Text("PC screen when this was asked · tap to open", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
             if (full) FullScreenShot(shot!!) { full = false }
         }
-        g.optBoolean("shot_locked") -> Text("PC locked: no screenshot taken.", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-        hasShot -> Text("Loading the PC screenshot…", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        g.optBoolean("shot_locked") -> Text("PC locked: no screenshot taken.", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+        hasShot -> Text("Loading the PC screenshot…", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
     }
 }

@@ -114,7 +114,7 @@ fun PcModeSwitch(pc: JSONObject?, onSwitch: (String, String) -> Unit) {
         }
     }
     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("AI model", color = Mc.Muted, fontSize = 12.sp)
+        Text("AI model", color = Mc.Muted, fontSize = 13.sp)
         listOf("qwen" to "Qwen3-Coder 30B", "gptoss" to "gpt-oss 20B").forEach { (id, text) ->
             val on = model == id
             Text(
@@ -126,10 +126,10 @@ fun PcModeSwitch(pc: JSONObject?, onSwitch: (String, String) -> Unit) {
         }
     }
     if (current == "gaming" && pc.optBoolean("auto")) {
-        Text("The game watcher switched to Gaming by itself and will switch back when the game closes.", color = Mc.Muted, fontSize = 12.sp,
+        Text("The game watcher switched to Gaming by itself and will switch back when the game closes.", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(top = 6.dp))
     }
-    pc.num("since")?.let { if (!switching) Text("since ${clock(it)}", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+    pc.num("since")?.let { if (!switching) Text("since ${clock(it)}", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
     if (switching) {
         val target = sw.optString("target")
         val elapsed = (now - (sw.num("at") ?: now)).coerceAtLeast(0.0)
@@ -287,14 +287,14 @@ fun LocalAiCard(active: Boolean, onOpenReport: (String) -> Unit, onLoggedOut: ()
                     Spacer(Modifier.width(8.dp))
                     Column {
                         Text(lc.optString("cmd"), color = Mc.Text, fontSize = 13.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        lc.num("at")?.let { Text("last check ${ago(it)}", color = Mc.Muted, fontSize = 12.sp) }
+                        lc.num("at")?.let { Text("last check ${ago(it)}", color = Mc.Muted, fontSize = 13.sp) }
                     }
                 }
             }
         }
         val log = job?.optJSONObject("log")
         if (log != null) {
-            Text("Newest trial log", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
+            Text("Newest trial log", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
             Text(log.optString("name") + (log.num("at")?.let { " · ${ago(it)}" } ?: ""), color = Mc.Text, fontSize = 13.sp, fontFamily = FontFamily.Monospace,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             log.optString("line").takeIf { it.isNotBlank() }?.let {

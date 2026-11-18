@@ -168,7 +168,7 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             }
             val d = data
             if (d == null) {
-                if (error == null) Text("Loading…", color = Mc.Muted)
+                if (error == null) SkeletonCards()
                 return@Column
             }
             PcCard(d, busy || pcPending != null, pcPending, onWake = { act("/api/pc/wake", ok = "Wake sent", pending = "wake") }, onSleep = { sleepDialog = true })

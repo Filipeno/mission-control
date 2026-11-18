@@ -271,7 +271,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                     s?.let { val (chip, color) = stateChip(it.optString("state"))
                         Text(chip, color = if (color == Mc.Idle) Mc.Muted else color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clip(RoundedCornerShape(50)).background(Mc.ButtonDark).padding(horizontal = 10.dp, vertical = 3.dp))
-                        Text(it.optString("cwd").substringAfterLast('\\'), color = Mc.Muted, fontSize = 12.sp, maxLines = 1,
+                        Text(it.optString("cwd").substringAfterLast('\\'), color = Mc.Muted, fontSize = 13.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
                         val rc = it.optString("rc_id")
                         if (rc.isNotBlank()) Text("Claude app ↗", color = Mc.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
@@ -372,7 +372,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
             val desktop = s.optString("kind") == "desktop"
             HorizontalDivider(color = Mc.Border)
             if (!desktop) Text("Messages from the phone work only for Claude Desktop sessions. Use the Claude app link above.",
-                color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
             if (desktop) Row(Modifier.fillMaxWidth().background(Mc.Bg).padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("Message Claude…", maxLines = 1) },
@@ -537,9 +537,10 @@ internal fun PrimaryButton(text: String, modifier: Modifier = Modifier, enabled:
     }
 
 @Composable
-internal fun DarkBtn(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, onClick: () -> Unit) =
+internal fun DarkBtn(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, outlined: Boolean = false, onClick: () -> Unit) =
     OutlinedButton(onClick = onClick, modifier = modifier.height(50.dp), shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.outlinedButtonColors(containerColor = Mc.ButtonDark, contentColor = color), border = BorderStroke(1.dp, Mc.Border)) {
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (outlined) Color.Transparent else Mc.ButtonDark, contentColor = color),
+        border = BorderStroke(1.dp, if (outlined) Mc.NavIdle else Mc.Border)) {
         Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 
@@ -614,7 +615,7 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
             else -> CodeBox(inp.toString(2))
         }
         Text("Folder: ${g.optString("cwd")}" + (g.optString("agent").takeIf { it.isNotBlank() }?.let { " · subagent $it" } ?: ""),
-            color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+            color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
         if (g.optBoolean("truncated")) Text("Too long to show fully here: check it at the PC before allowing.", color = Mc.Warn, fontSize = 13.sp)
         if (kind != "plan") GateShot(g)
         Spacer(Modifier.height(10.dp))
@@ -632,7 +633,7 @@ private fun GateCard(g: JSONObject, busy: Boolean, send: (decision: String, payl
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (kind == "plan") {
                     DarkBtn("Approve", Modifier.weight(1.5f)) { if (openComments > 0) askComments = true else send("allow", "", "Approve plan") }
-                    DarkBtn("Reject", Modifier.weight(1f), Mc.Bad) {
+                    DarkBtn("Reject", Modifier.weight(1f), outlined = true) {
                         if (openComments > 0 && planDoc.isNotBlank()) {      // the comments are the feedback: reject in the plan, where they are listed
                             Toast.makeText(ctx, "Reject it in the plan: your comments go with it", Toast.LENGTH_LONG).show()
                             cz.filip.missioncontrol.MainActivity.wantDoc.value = planDoc; cz.filip.missioncontrol.MainActivity.wantTab.intValue = 2
@@ -681,7 +682,7 @@ private fun ProposalCard(p: JSONObject, busy: Boolean, onStart: () -> Unit, onHi
             PrimaryButton("Start", Modifier.weight(1.3f), onClick = onStart)
             DarkBtn("Hide", Modifier.weight(1f), onClick = onHide)
         }
-        Text("Start is typed into the session as your words (PC must be unlocked and unused for 2 min).", color = Mc.Muted, fontSize = 12.sp,
+        Text("Start is typed into the session as your words (PC must be unlocked and unused for 2 min).", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(top = 6.dp))
     }
 }

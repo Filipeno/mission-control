@@ -179,7 +179,7 @@ fun TodoScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             IconButton(onClick = onSettings, modifier = Modifier.padding(bottom = 2.dp)) { Icon(Icons.Filled.Settings, "Settings", tint = Mc.Muted) }
         }
         error?.let { McCard { Text(it, color = Mc.Bad) } }
-        val l = list ?: run { if (error == null) Text("Loading…", color = Mc.Muted); return@Column }
+        val l = list ?: run { if (error == null) SkeletonCards(); return@Column }
         val opens = l.optJSONArray("open").objs()
         val dones = l.optJSONArray("done").objs()
         if (opens.isEmpty()) McCard {
@@ -320,7 +320,8 @@ private fun TodoDetail(id: String, onBack: () -> Unit, send: (String, JSONObject
             }
             if (isOpen) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { SmallBtn(if (photos.isEmpty()) "+ Photo" else "+ Another photo") { photoDialog = true } }
-                OutlinedTextField(value = note ?: "", onValueChange = { note = it }, placeholder = { Text("Note (what happened?)") },
+                FieldLabel("Note (what happened?)")
+                OutlinedTextField(value = note ?: "", onValueChange = { note = it }, placeholder = { Text("e.g. it works, but slowly") },
                     modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 6)
             } else if (!t.optString("note").isNullOrBlank()) McCard { Label("Your note"); Text(t.optString("note"), color = Mc.Text, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp)) }
         }

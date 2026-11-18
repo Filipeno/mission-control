@@ -429,8 +429,9 @@ private fun ItemRow(id: Int, text: String, it: JSONObject, nComments: Int, setSt
             }
         }
         if (noteOpen || note.isNotBlank() || status == "fail") {
-            OutlinedTextField(value = note, onValueChange = { v -> note = v }, placeholder = { Text("Note (what went wrong?)") },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 1, maxLines = 5)
+            FieldLabel("Note (what went wrong?)")
+            OutlinedTextField(value = note, onValueChange = { v -> note = v }, placeholder = { Text("e.g. the button does nothing") },
+                modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 5)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
             val nShots = it.optJSONArray("shots")?.length() ?: 0
@@ -462,7 +463,8 @@ private fun CommentsDialog(list: List<JSONObject>, onDismiss: () -> Unit, onAdd:
                         if (!c.optBoolean("resolved")) TextButton(onClick = { onResolve(c.optString("id")) }) { Text("Done") }
                     }
                 }
-                OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("Add a comment") }, modifier = Modifier.fillMaxWidth())
+                FieldLabel("Add a comment")
+                OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("e.g. this step is unclear") }, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = { TextButton(enabled = text.isNotBlank(), onClick = { onAdd(text.trim()); text = "" }) { Text("Add") } },
@@ -518,7 +520,7 @@ private fun ColumnScope.DocText(slug: String, doc: JSONObject, post: (String, JS
         return
     }
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text("Long-press a line to comment on it." + if (kind == "plan") " Comments go to Claude when you reject the plan." else "", color = Mc.Muted, fontSize = 12.sp,
+        Text("Long-press a line to comment on it." + if (kind == "plan") " Comments go to Claude when you reject the plan." else "", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(bottom = 8.dp))
         lines.forEachIndexed { i, l ->
             val h = Regex("^(#{1,6})\\s+(.*)").find(l)

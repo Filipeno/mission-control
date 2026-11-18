@@ -158,7 +158,7 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
             }
             error?.let { McCard { Text(it, color = Mc.Bad, fontSize = 14.sp) } }
             if (d == null) {
-                if (error == null) Text("Loading…", color = Mc.Muted)
+                if (error == null) SkeletonCards()
                 return@Column
             }
             PcCard(d, shot, shotAt, waitingShot, onShot = ::requestShot, onOpen = { full = true }, onMode = { mode, model ->
@@ -349,7 +349,7 @@ private fun PcCard(d: JSONObject, shot: ImageBitmap?, shotAt: Double, waiting: B
             if (shot != null) Image(shot, "PC screenshot", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             else Text("No screenshot yet", color = Mc.Muted, fontSize = 14.sp)
         }
-        Text(if (shotAt > 0) "Last screenshot · ${clock(shotAt)}" else "Needs the PC awake", color = Mc.Muted, fontSize = 12.sp,
+        Text(if (shotAt > 0) "Last screenshot · ${clock(shotAt)}" else "Needs the PC awake", color = Mc.Muted, fontSize = 13.sp,
             modifier = Modifier.padding(top = 6.dp))
         Spacer(Modifier.height(6.dp))
         val fresh = pc.optBoolean("fresh")

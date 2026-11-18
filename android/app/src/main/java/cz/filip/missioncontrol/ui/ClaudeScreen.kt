@@ -208,7 +208,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                     }
                 }
                 error?.let { McCard { Text(it, color = Mc.Bad, fontSize = 14.sp) } }
-                if (d == null) { if (error == null) Text("Loading…", color = Mc.Muted); return@Column }
+                if (d == null) { if (error == null) SkeletonCards(); return@Column }
                 if (d.optBoolean("helper") == false && d.optBoolean("pc_online")) {
                     Text("The PC helper is not reporting, so this may be old.", color = Mc.Warn, fontSize = 13.sp)
                 }
@@ -307,8 +307,9 @@ private fun HelperQuestionCard(q: JSONObject, onSend: (String) -> Unit) {
             Text("Last try failed: $it", color = Mc.Bad, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
         }
         if (state == "open") {
-            OutlinedTextField(value = text, onValueChange = { if (it.length <= 1000) text = it }, minLines = 2, placeholder = { Text("Your answer") }, supportingText = { Text("Max 1000 characters") },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+            FieldLabel("Your answer")
+            OutlinedTextField(value = text, onValueChange = { if (it.length <= 1000) text = it }, minLines = 2, placeholder = { Text("e.g. yes, go ahead") }, supportingText = { Text("Max 1000 characters") },
+                modifier = Modifier.fillMaxWidth())
             Button(onClick = { onSend(text.trim()); text = "" }, enabled = text.isNotBlank(), shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(46.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C))) {
@@ -359,7 +360,7 @@ private fun ApprovalCard(a: JSONObject, busy: Boolean, onAnswer: (String, String
                     colors = ButtonDefaults.buttonColors(containerColor = Mc.Accent, contentColor = Color(0xFF04121C))) {
                     Text("Approve", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
-                DarkButton("Reject", Modifier.weight(1f), color = Mc.Bad) { onAnswer("reject", "") }
+                DarkButton("Reject", Modifier.weight(1f), outlined = true) { onAnswer("reject", "") }
                 DarkButton("Reply", Modifier.weight(1f), onClick = onReply)
             }
         }
@@ -367,10 +368,10 @@ private fun ApprovalCard(a: JSONObject, busy: Boolean, onAnswer: (String, String
 }
 
 @Composable
-private fun DarkButton(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, onClick: () -> Unit) =
+private fun DarkButton(text: String, modifier: Modifier = Modifier, color: Color = Mc.Text, outlined: Boolean = false, onClick: () -> Unit) =
     OutlinedButton(onClick = onClick, modifier = modifier.height(50.dp), shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.outlinedButtonColors(containerColor = Mc.ButtonDark, contentColor = color),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Mc.Border)) {
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (outlined) Color.Transparent else Mc.ButtonDark, contentColor = color),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (outlined) Mc.NavIdle else Mc.Border)) {
         Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 
@@ -393,11 +394,11 @@ private fun Sessions(sessions: List<JSONObject>, parked: JSONObject, usage: JSON
         val codexUsage = usage.optJSONObject("codex")
         val codexBack = parkedUntil("codex") ?: if (codexUsage?.optBoolean("limit_reached") == true)
             codexUsage.optJSONArray("windows").objects().mapNotNull { it.optDouble("resets_at").takeIf { r -> !r.isNaN() } }.maxOrNull() else null
-        rows += Triple("Codex", codexBack?.let { "Limit · back ${backAt(it)}" } ?: "Idle", if (codexBack != null) Mc.Bad else Mc.Idle)
+        rows += Triple("Codex", codexBack?.let { "Limit · back ${backAt(it)}" } ?: "Idle", if (codexBack != null) Mc.Warn else Mc.Idle)
         val gem = parkedUntil("gemini")
         rows += Triple("Gemini", gem?.let { "Key parked · back ${backAt(it)}" } ?: "Idle", if (gem != null) Mc.Warn else Mc.Idle)
         val agy = parkedUntil("agy")
-        rows += Triple("Antigravity", agy?.let { "Limit · back ${backAt(it)}" } ?: "Idle", if (agy != null) Mc.Bad else Mc.Idle)
+        rows += Triple("Antigravity", agy?.let { "Limit · back ${backAt(it)}" } ?: "Idle", if (agy != null) Mc.Warn else Mc.Idle)
         rows.forEachIndexed { i, (name, chip, color) ->
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(10.dp).clip(CircleShape).background(color))
@@ -424,7 +425,7 @@ private fun UsageCard(usage: JSONObject, parked: JSONObject) {
             val u = usage.optJSONObject(key)
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = if (i == 0) 0.dp else 14.dp)) {
                 Text(title, color = Mc.Text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                u?.optDouble("at")?.takeIf { !it.isNaN() }?.let { Text("updated ${clock(it)}", color = Mc.Muted, fontSize = 12.sp) }
+                u?.optDouble("at")?.takeIf { !it.isNaN() }?.let { Text("updated ${clock(it)}", color = Mc.Muted, fontSize = 13.sp) }
             }
             if (u == null) { Text("no data yet", color = Mc.Muted, fontSize = 13.sp); return@forEachIndexed }
             val wins = u.optJSONArray("windows").objects()
@@ -475,7 +476,7 @@ private fun HelpersCard(helpers: JSONObject) {
         health?.keys()?.asSequence()?.forEach { name ->
             val h = health.optJSONObject(name) ?: return@forEach
             val success = h.optDouble("success_percent").takeIf { !it.isNaN() } ?: return@forEach
-            Text("$name: ${success.toInt()}% success", color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            Text("$name: ${success.toInt()}% success", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

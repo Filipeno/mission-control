@@ -144,7 +144,7 @@ internal fun PlanBar(slug: String, doc: JSONObject, modifier: Modifier = Modifie
             PrimaryButton("Approve", Modifier.weight(1.4f)) {
                 if (ids.isNotEmpty()) askApprove = true else send("allow", "", "Approve plan: $title".take(60), emptyList())
             }
-            DarkBtn("Reject", Modifier.weight(1f), Mc.Bad) { reject = "" }
+            DarkBtn("Reject", Modifier.weight(1f), outlined = true) { reject = "" }
         }
     }
     if (askApprove) AlertDialog(onDismissRequest = { askApprove = false }, containerColor = Mc.Card,

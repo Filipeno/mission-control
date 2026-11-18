@@ -7,8 +7,8 @@ import androidx.compose.ui.graphics.Color
 
 /** Style A (dark dashboard) colors from the approved mockups. */
 object Mc {
-    val Bg = Color(0xFF0B0E14)
-    val Card = Color(0xFF141922)
+    val Bg = Color(0xFF10141C)
+    val Card = Color(0xFF171C26)
     val Border = Color(0xFF232B38)
     val Text = Color(0xFFE6EAF2)
     val Muted = Color(0xFF9AA4B5)
@@ -22,6 +22,7 @@ object Mc {
     val Nav = Color(0xFF0F131B)
     val NavSelected = Color(0xFF13202C)
     val NavIdle = Color(0xFF8C96A8)
+    val Field = Color(0xFF5F6878)
 }
 
 @Composable
@@ -32,7 +33,7 @@ fun McTheme(content: @Composable () -> Unit) {
             background = Mc.Bg, onBackground = Mc.Text,
             surface = Mc.Card, onSurface = Mc.Text,
             surfaceVariant = Mc.Card, onSurfaceVariant = Mc.Muted,
-            outline = Mc.NavIdle, tertiary = Mc.Warn,
+            outline = Mc.Field, tertiary = Mc.Warn,
         ),
         content = content,
     )
