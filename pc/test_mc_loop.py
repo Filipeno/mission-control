@@ -299,5 +299,15 @@ class Chat(unittest.TestCase):
         self.assertRaises(ValueError, ml.chat, "../x", {}, None)
 
 
+class TablesToCardsTest(unittest.TestCase):
+    def test_table_becomes_list(self):
+        t = "Tasks: 2\n\n| id | status | reason |\n|---|---|---|\n| a1 | failed | x y |\n| b2 | stuck | z |\n\nend"
+        want = "Tasks: 2\n\n- **a1**\n  - status: failed\n  - reason: x y\n- **b2**\n  - status: stuck\n  - reason: z\n\nend"
+        self.assertEqual(ml.tables_to_cards(t), want)
+
+    def test_plain_text_unchanged(self):
+        self.assertEqual(ml.tables_to_cards("a\nb\n"), "a\nb\n")
+
+
 if __name__ == "__main__":
     unittest.main()

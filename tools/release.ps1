@@ -36,6 +36,9 @@ if (-not $NoCommit) {
     if (git status --porcelain) { git commit -m "Release $name`: $Notes" }
 }
 git tag $tag
+if ($LASTEXITCODE) { throw 'git tag failed' }
 git push origin HEAD --tags
+if ($LASTEXITCODE) { throw "git push failed (exit $LASTEXITCODE): nothing was released" }
 gh release create $tag dist\mission-control.apk dist\mission-control.json --title "Mission Control $name" --notes $Notes
+if ($LASTEXITCODE) { throw "gh release create failed (exit $LASTEXITCODE): the tag may already be pushed" }
 Write-Host "Done: $tag is live. The app finds it within 12 h (or Settings > Check for updates)."

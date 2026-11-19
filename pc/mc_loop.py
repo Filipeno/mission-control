@@ -408,10 +408,39 @@ def pi(cfg, method, path, body=None, timeout=20):
     return json.loads(text) if text.strip() else {}
 
 
+def tables_to_cards(text):
+    """Markdown tables -> one bullet per row ('**id** - header: value, ...'); the Docs viewer has no table support."""
+    out, rows = [], []
+
+    def cells(l):
+        return [c.strip() for c in l.strip().strip("|").split("|")]
+
+    def flush():
+        if len(rows) >= 2 and all(set(c) <= set("-: ") and c for c in cells(rows[1])):
+            head = cells(rows[0])
+            for r in rows[2:]:
+                v = cells(r)
+                out.append("- **" + (v[0] if v else "") + "**")
+                for h, x in zip(head[1:], v[1:]):
+                    out.append("  - " + h + ": " + x)
+        else:
+            out.extend(rows)
+        rows.clear()
+
+    for l in text.split("\n"):
+        if l.lstrip().startswith("|"):
+            rows.append(l)
+        else:
+            flush()
+            out.append(l)
+    flush()
+    return "\n".join(out)
+
+
 def morning_text(hub=None):
     p = Path(hub or HUB) / "files" / "loop-morning.md"
     try:
-        return p, redact(p.read_text(encoding="utf-8-sig"))
+        return p, tables_to_cards(redact(p.read_text(encoding="utf-8-sig")))
     except OSError:
         raise LookupError("loop-morning.md does not exist yet (the loop runner writes it after a night run)")
 
