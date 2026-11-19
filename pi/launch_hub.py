@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+import tiers
+
 MODELS = ("sonnet", "haiku", "opus")
 EFFORTS = ("low", "medium", "high", "xhigh")
 PERMS = ("default", "acceptEdits", "auto", "bypassPermissions")
@@ -136,7 +138,7 @@ class LaunchHub:
         text = session_brief(path, model, effort, perm, prompt, area == "skola")
         if len(text) > SKOLA_TEXT_CAP:
             raise ValueError("The prompt is too long to hand over.")
-        r = self.sessions.type_to_boss(text, kind="start", token_hash=token_hash, msg=msg, d=d)
+        r = self.sessions.type_to_boss(text, kind="start", token_hash=token_hash, msg=msg, d=d, tier=tiers.new_session_tier(perm))
         return {"ok": True, "boss": r.get("boss", ""), "folder": path}
 
     def skola_start(self, token_hash: str, d: dict) -> dict:
@@ -154,7 +156,7 @@ class LaunchHub:
             raise ValueError("an uploaded file expired; share it again")
         if sum(m["size"] for m in metas) > MAX_UPLOAD:
             raise ValueError("files are over 25 MB together")
-        self.claude.verify(token_hash, f"skola|{subject}|{','.join(ids)}|{note}|{int(d.get('ts') or 0)}", str(d.get("sig", "")), int(d.get("ts") or 0))
+        self.claude.verify(token_hash, f"skola|{subject}|{','.join(ids)}|{note}|{int(d.get('ts') or 0)}", str(d.get("sig", "")), int(d.get("ts") or 0), tier="M")
         if not self.sessions.boss_session():           # fail before anything is queued or saved
             raise LookupError("No main Claude Desktop session is open in D:\\projekty or D:\\ai-hub (or the PC is not reporting). Open one and try again.")
         key = "skola-" + secrets.token_hex(6)

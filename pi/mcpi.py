@@ -603,6 +603,7 @@ def make_app(state: AppState):
         with state.lock:
             state.tokens.pop(_hash_token(bearer(req)), None)
             save_json("tokens.json", state.tokens)
+        state.claude.drop_keys(_hash_token(bearer(req)))
         return {"ok": True}
 
     @app.get("/api/home")
@@ -791,6 +792,7 @@ def make_app(state: AppState):
         v["questions"] = state.ai.questions()
         v["digest"] = state.ai.digest_view()
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
+        v["has_mkey"] = state.claude.has_mkey(_hash_token(bearer(req)))
         v["ideas_audio"] = state.settings.get("ideas_audio", False)
         return v
 
@@ -873,6 +875,7 @@ def make_app(state: AppState):
         need_app(req)
         v = state.launch.folders_view()
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
+        v["has_mkey"] = state.claude.has_mkey(_hash_token(bearer(req)))
         return v
 
     @app.post("/api/launch/upload")
@@ -917,6 +920,7 @@ def make_app(state: AppState):
         v = state.sessions.list_view()
         with_plan_info(v["gates"])
         v["has_key"] = state.claude.has_key(_hash_token(bearer(req)))
+        v["has_mkey"] = state.claude.has_mkey(_hash_token(bearer(req)))
         return v
 
     @app.get("/api/sessions/{sid}")
@@ -985,11 +989,23 @@ def make_app(state: AppState):
     @app.post("/api/keys")
     def register_key(req: Request, d: dict = Body(default={})):
         need_app(req)
+        return _register_key(req, d, "h")
+
+    @app.post("/api/keys/window")
+    def register_window_key(req: Request, d: dict = Body(default={})):
+        """The 5-minute window key (tier M); signed by the every-time key. A separate path so an old Pi says 404."""
+        need_app(req)
+        return _register_key(req, d, "m")
+
+    def _register_key(req: Request, d: dict, slot: str):
         try:
-            state.claude.register_key(_hash_token(bearer(req)), str(d.get("public_key", "")))
-        except ValueError as e:
+            state.claude.register_key(_hash_token(bearer(req)), str(d.get("public_key", "")), slot,
+                                      {"ts": d.get("ts"), "sig": d.get("sig")})
+        except PermissionError as e:
+            raise HTTPException(403, str(e))
+        except (ValueError, TypeError) as e:
             raise HTTPException(400, f"bad key: {e}")
-        print("fingerprint key registered", flush=True)
+        print(f"fingerprint key registered ({slot})", flush=True)
         return {"ok": True}
 
     @app.post("/api/approvals/{aid}/answer")
@@ -1399,6 +1415,14 @@ def make_app(state: AppState):
         if time.time() - state.helper_at > HELPER_STALE:
             raise HTTPException(409, "PC helper not connected (is the PC on?)")
         state.health.request_restart()
+        return {"ok": True}
+
+    @app.post("/api/system/bitwarden/open")
+    def system_bitwarden_open(req: Request):
+        need_app(req)
+        if time.time() - state.helper_at > HELPER_STALE:
+            raise HTTPException(409, "PC helper not connected (is the PC on?)")
+        state.health.request_bitwarden()
         return {"ok": True}
 
     @app.post("/api/system/rc/enable")

@@ -8,20 +8,21 @@ import launch_hub as lh
 
 
 class Claude:
-    def __init__(self): self.items, self.verified, self.bad = [], [], False
+    def __init__(self): self.items, self.verified, self.bad, self.tiers = [], [], False, []
     def enqueue(self, x): self.items.append(x)
-    def verify(self, th, msg, sig, ts):
+    def verify(self, th, msg, sig, ts, tier="H"):
         if self.bad or sig != "good":
             raise PermissionError("bad signature")
         self.verified.append(msg)
+        self.tiers.append(tier)
 
 
 class Sessions:
     def __init__(self): self.boss, self.typed = {"id": "x"}, []
     def boss_session(self): return self.boss
-    def type_to_boss(self, text, kind="start", token_hash="", msg="", d=None):
+    def type_to_boss(self, text, kind="start", token_hash="", msg="", d=None, tier="H"):
         if msg:
-            Claude_.verify(token_hash, msg + f"|{int((d or {}).get('ts') or 0)}", str((d or {}).get("sig", "")), 0)
+            Claude_.verify(token_hash, msg + f"|{int((d or {}).get('ts') or 0)}", str((d or {}).get("sig", "")), 0, tier=tier)
         if not self.boss:
             raise LookupError("No main Claude Desktop session is open")
         self.typed.append((text, kind, msg))
@@ -63,6 +64,12 @@ class T(unittest.TestCase):
         self.assertIn('cwd "D:\\projekty\\mission-control"', text)
         self.assertIn("<<<PROMPT\nfix the thing\nPROMPT>>>", text)
         self.assertEqual(msg, "newsess|projects|mission-control|sonnet|low|default|fix the thing")
+        self.assertEqual(self.c.tiers, ["M"])                         # default permission mode: the 5-minute window
+
+    def test_new_session_mode_tier(self):
+        for perm in ("acceptEdits", "auto", "bypassPermissions"):
+            self.h.new_session("th", self.sess(permission=perm))
+        self.assertEqual(self.c.tiers, ["H", "H", "H"])               # any other mode: a fresh fingerprint
 
     def test_skola_session_czech_note(self):
         self.h.new_session("th", self.sess(area="skola", name="MAT"))

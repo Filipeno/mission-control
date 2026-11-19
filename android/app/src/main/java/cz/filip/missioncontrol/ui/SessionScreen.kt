@@ -88,15 +88,27 @@ private fun JSONArray?.objs(): List<JSONObject> = if (this == null) emptyList() 
  * Fingerprint, sign "[msg]|ts", then POST [body] + ts + sig to [path]. Registers the signing key first if
  * mc-pi has none. Calls [done] on the main thread with null (ok) or an error text.
  */
-fun signedPost(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, done: (String?) -> Unit) =
-    signedPostEx(ctx, title, msg, path, body, hasKey0, {}, done)
+fun signedPost(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, tier: String = "H", done: (String?) -> Unit) =
+    signedPostEx(ctx, title, msg, path, body, hasKey0, {}, tier, done)
 
-/** Like [signedPost], but calls [onSigned] (main thread) the moment the fingerprint succeeds, before the Pi has answered: update the UI there. */
-fun signedPostEx(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, onSigned: () -> Unit, done: (String?) -> Unit) {
+/**
+ * Like [signedPost], but calls [onSigned] (main thread) the moment the fingerprint succeeds, before the Pi has answered: update the UI there.
+ * [tier] (fingerprint option C): "H" a prompt every time, "M" the 5-minute window, "0" not signed at all. mc-pi checks it again.
+ */
+fun signedPostEx(ctx: Context, title: String, msg: String, path: String, body: JSONObject, hasKey0: Boolean, onSigned: () -> Unit,
+                 tier: String = "H", done: (String?) -> Unit) {
     val hasKey = hasKey0 && !Signer.needsRegister(ctx)
     val act = ctx as? FragmentActivity ?: return done("no activity")
     val scope = kotlinx.coroutines.MainScope()
     val ts = System.currentTimeMillis() / 1000
+    if (tier == "0") {
+        onSigned()
+        scope.launch {
+            try { withContext(Dispatchers.IO) { Api.post(ctx, path, body) }; done(null) }
+            catch (e: ApiError) { done(e.message ?: "error") }
+        }
+        return
+    }
     scope.launch {
         if (!hasKey) {
             try { withContext(Dispatchers.IO) { Signer.register(ctx) } } catch (e: Exception) {
@@ -104,7 +116,7 @@ fun signedPostEx(ctx: Context, title: String, msg: String, path: String, body: J
                      else "Could not register the fingerprint key: ${e.message}"); return@launch
             }
         }
-        Signer.sign(act, title, "$msg|$ts") { sig, err ->
+        Signer.sign(act, title, "$msg|$ts", tier) { sig, err ->
             if (sig == null) { done(err ?: "cancelled"); return@sign }
             onSigned()
             scope.launch {
@@ -112,11 +124,36 @@ fun signedPostEx(ctx: Context, title: String, msg: String, path: String, body: J
                     withContext(Dispatchers.IO) { Api.post(ctx, path, body.put("ts", ts).put("sig", sig)) }
                     done(null)
                 } catch (e: ApiError) {
+                    if (e.code == 403 && tier == "M") Signer.forgetWindowKey(ctx)      // re-vouch the window key next time
                     if (e.code == 403 && e.message?.contains("key") == true) runCatching { withContext(Dispatchers.IO) { Signer.register(ctx) } }
                     done(e.message ?: "error")
                 }
             }
         }
+    }
+}
+
+/** Mirrors mc-pi's tiers.answer_tier (mc-pi checks it again): Deny 0 (with a note M), Allow the gate's tier, option picks 0, free text M. */
+fun gateTier(g: JSONObject?, decision: String, payload: String): String = when (decision) {
+    "deny" -> if (payload.isEmpty()) "0" else "M"
+    "allow" -> g?.optString("tier")?.takeIf { it == "M" || it == "H" } ?: "H"
+    "answer" -> if (onlyPicks(g, payload)) "0" else "M"
+    else -> "H"
+}
+
+private fun onlyPicks(g: JSONObject?, payload: String): Boolean {
+    val answers = runCatching { JSONObject(payload) }.getOrNull() ?: return false
+    if (answers.length() == 0) return false
+    val qs = g?.optJSONObject("input")?.optJSONArray("questions") ?: return false
+    val labels = (0 until qs.length()).mapNotNull { qs.optJSONObject(it) }.associate { q ->
+        q.optString("question") to (0 until (q.optJSONArray("options")?.length() ?: 0)).map { i ->
+            q.optJSONArray("options")!!.let { o -> o.optJSONObject(i)?.optString("label") ?: o.optString(i) }
+        }.toSet()
+    }
+    return answers.keys().asSequence().all { k ->
+        val offered = labels[k] ?: return@all false
+        val a = answers.optString(k)
+        a in offered || a.split(",").all { it.trim() in offered }
     }
 }
 
@@ -217,7 +254,7 @@ fun GateConfigDialog(current: String, hasKey: Boolean, onClose: () -> Unit) {
             val next = if (current == "readonly") "none" else "readonly"
             TextButton(onClick = {
                 signedPostEx(ctx, "Auto-approve: $next", "gate-config|$next|1", "/api/gate/config", JSONObject().put("auto", next).put("enabled", true), hasKey,
-                    onSigned = { Toast.makeText(ctx, "Saved", Toast.LENGTH_SHORT).show(); onClose() }) { err ->
+                    onSigned = { Toast.makeText(ctx, "Saved", Toast.LENGTH_SHORT).show(); onClose() }, tier = "H") { err ->
                     if (err != null) { Toast.makeText(ctx, "Not saved: $err", Toast.LENGTH_LONG).show(); onClose() }
                 }
             }) { Text(if (current == "readonly") "Ask for everything" else "Allow read-only tools") }
@@ -305,7 +342,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                         busy = true
                         signedPostEx(ctx, "Allow once: $label", "gate|$gid|allow|", "/api/gate/$gid/answer",
                             JSONObject().put("decision", "allow").put("payload", ""), hasKey,
-                            onSigned = { busy = false; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() }) { err ->
+                            onSigned = { busy = false; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() }, tier = "H") { err ->
                             busy = false
                             if (err != null) Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show()
                             scope.launch { load() }
@@ -325,7 +362,8 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                     busy = true
                     signedPostEx(ctx, label, "gate|${g.optString("id")}|$decision|$payload", "/api/gate/${g.optString("id")}/answer",
                         JSONObject().put("decision", decision).put("payload", payload), hasKey,
-                        onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() }) { err ->
+                        onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Sent to the PC", Toast.LENGTH_SHORT).show() },
+                        tier = gateTier(g, decision, payload)) { err ->
                         busy = false
                         if (err != null) { gone = gone - key; Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show() }
                         scope.launch { load() }
@@ -337,7 +375,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                         busy = true
                         signedPostEx(ctx, "Start: ${p.optString("title")}", "start|${p.optString("key")}", "/api/proposals/${p.optString("key")}/start",
                             JSONObject(), hasKey,
-                            onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Start sent to the session", Toast.LENGTH_SHORT).show() }) { err ->
+                            onSigned = { busy = false; gone = gone + key; Toast.makeText(ctx, "Start sent to the session", Toast.LENGTH_SHORT).show() }, tier = "M") { err ->
                             busy = false
                             if (err != null) { gone = gone - key; Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show() }
                             scope.launch { load() }
@@ -390,7 +428,7 @@ fun SessionView(sid: String, hasKey: Boolean, onBack: () -> Unit, onLoggedOut: (
                     val t = text.trim(); busy = true
                     signedPostEx(ctx, "Send to ${s.optString("title").take(40)}", "msg|$sid|$t", "/api/sessions/$sid/message",
                         JSONObject().put("text", t), hasKey,
-                        onSigned = { busy = false; if (text.trim() == t) text = ""; sending.add(t) }) { err ->
+                        onSigned = { busy = false; if (text.trim() == t) text = ""; sending.add(t) }, tier = "M") { err ->
                         busy = false
                         if (err != null) {
                             sending.remove(t)

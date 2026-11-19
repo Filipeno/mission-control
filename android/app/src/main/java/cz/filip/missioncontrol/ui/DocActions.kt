@@ -112,7 +112,7 @@ internal fun PlanBar(slug: String, doc: JSONObject, modifier: Modifier = Modifie
     fun send(decision: String, payload: String, label: String, markSent: List<String>) {
         busy = true
         signedPostEx(ctx, label, "gate|$gid|$decision|$payload", "/api/gate/$gid/answer",
-            JSONObject().put("decision", decision).put("payload", payload), true,
+            JSONObject().put("decision", decision).put("payload", payload), true, tier = gateTier(gate, decision, payload),
             onSigned = {
                 busy = false; answered = true
                 Toast.makeText(ctx, if (decision == "allow") "Plan approved: sent to the PC" else "Changes sent to the PC", Toast.LENGTH_SHORT).show()
@@ -192,7 +192,7 @@ internal fun StartSessionDialog(slug: String, doc: JSONObject, onClose: (started
             TextButton(enabled = !busy && n > 0 && folder.isNotBlank(), onClick = {
                 busy = true
                 signedPostEx(ctx, "Start a session: ${doc.optString("title")}".take(60), "docstart|$slug", "/api/docs/$slug/start-session",
-                    JSONObject().put("folder", folder.trim()), true, onSigned = {}) { err ->
+                    JSONObject().put("folder", folder.trim()), true, onSigned = {}, tier = "M") { err ->
                     busy = false
                     if (err != null) Toast.makeText(ctx, "Not sent: $err", Toast.LENGTH_LONG).show()
                     else { Toast.makeText(ctx, "Asked your main session to start it", Toast.LENGTH_LONG).show(); onClose(true) }

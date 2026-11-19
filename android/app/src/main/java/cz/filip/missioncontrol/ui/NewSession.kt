@@ -117,7 +117,8 @@ fun NewSessionSheet(onClose: () -> Unit) {
                     val body = JSONObject().put("area", area).put("name", name).put("model", p.model).put("effort", p.effort)
                         .put("permission", p.perm).put("prompt", prompt.trim())
                     signedPostEx(ctx, "New session in $name".take(60), "newsess|$area|$name|${p.model}|${p.effort}|${p.perm}|${prompt.trim()}",
-                        "/api/sessions/new", body, data?.optBoolean("has_key") == true, onSigned = {}) { err ->
+                        "/api/sessions/new", body, data?.optBoolean("has_key") == true, onSigned = {},
+                        tier = if (p.perm == "default") "M" else "H") { err ->
                         busy = false
                         if (err != null) Toast.makeText(ctx, "Not started: $err", Toast.LENGTH_LONG).show()
                         else { saveNewPrefs(ctx, area, name, p); Toast.makeText(ctx, "Asked your main session to start it", Toast.LENGTH_LONG).show(); onClose() }

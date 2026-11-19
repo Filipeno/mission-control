@@ -86,6 +86,9 @@ class HealthHub:
 
     def on_result(self, d):
         key = str((d or {}).get("key") or "")
+        if key.startswith("bitwarden-"):
+            self._bitwarden_result(d)
+            return
         if not key.startswith("restart-"):
             return
         self.restart = {"state": "done" if d.get("ok") is True else "failed",
@@ -99,6 +102,25 @@ class HealthHub:
         self.claude.enqueue({"key": "restart-%d" % int(now), "kind": "claude-restart", "at": now})
         self.restart = {"state": "requested", "detail": "", "at": now}
         self.save("health-restart.json", self.restart)
+
+    def request_bitwarden(self):
+        # Opens Bitwarden desktop on the PC. No secret is involved: the PC helper only starts / focuses the app.
+        now = time.time()
+        self.claude.enqueue({"key": "bitwarden-%d" % int(now), "kind": "bitwarden-open", "at": now})
+
+    def _bitwarden_result(self, d):
+        ok = d.get("ok") is True
+        detail = str(d.get("detail") or "")[:200]
+        if ok and not detail.startswith("PC is locked"):
+            title = "Bitwarden is open on the PC"
+            body = ("Choose 'Log in with device' there, then approve in the Bitwarden app on this phone. "
+                    "Check the fingerprint phrase matches.")
+        elif ok:
+            title, body = "Bitwarden started, but the PC is locked", "Unlock the PC, then choose 'Log in with device'."
+        else:
+            title, body = "Could not open Bitwarden on the PC", detail or "unknown error"
+        self.deliver({"at": time.time(), "kind": "bitwarden-open", "cat": "system", "title": title, "body": body,
+                      "group": "bitwarden-open", "quiet": False, "actions": []})
 
     def request_rc(self, sid):
         sid = str(sid or "")

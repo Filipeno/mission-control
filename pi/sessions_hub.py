@@ -13,12 +13,16 @@ Signed strings:
 App cards (stage 11a-1): the Claude desktop app's own approval cards come in the snapshot as gates of kind "appcard"
 (id "ac-<request id>"). Allow needs the signature like every gate; Deny is accepted unsigned (one tap), only as deny.
 Never "always". mc-pc clicks the card and reports clicked / refused / "waiting for unlock" (held up to 8 h).
+Tiers (tiers.py, fingerprint option C): each gate carries "tier" = what its Allow needs ("M" 5-minute window key,
+"H" every-time key). Deny is 0, option picks 0, free text / messages / starts M, auto-approve change and app-card Allow H.
 """
 import json
 import re
 import secrets
 import threading
 import time
+
+import tiers
 
 SID_RE = re.compile(r"^[0-9a-f-]{36}$")
 GID_RE = re.compile(r"^(?:[0-9]{8}-[0-9]{6}-[0-9a-f]{4}|ac-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
@@ -62,6 +66,7 @@ class SessionsHub:
         notify = []
         with self.lock:
             for g in gates:
+                g["tier"] = tiers.allow_tier(g)
                 g["session"] = titles.get(g.get("session_id")) or g.get("card_title") or "Claude"
                 if g["id"] not in self.seen:
                     self.seen.add(g["id"])
@@ -100,7 +105,7 @@ class SessionsHub:
                   "group": f"{kind}:{x.get('id') or x.get('key')}", "quiet": False, "actions": [],
                   "sid": x.get("session_id", "")}
             if kind == "gate":
-                ev.update(gate=x["id"], gkind=x["kind"], summary=x["summary"][:200])
+                ev.update(gate=x["id"], gkind=x["kind"], summary=x["summary"][:200], tier=x["tier"])
                 if x["kind"] == "plan" and x.get("doc"):
                     ev.update(doc=x["doc"], tab=2, sid="")          # the tap opens the plan in the Docs tab
             self.deliver(ev)
@@ -154,9 +159,10 @@ class SessionsHub:
             return self._answer_card(token_hash, gid, decision, payload, d)
         with self.lock:
             peek = next((x for x in self.snap["gates"] if x["id"] == gid), None)
-        # A plain permission Deny without a note needs no fingerprint (stage 11e widget: Deny is one tap, like on app cards).
-        if not (decision == "deny" and not payload and not d.get("sig") and peek and peek["kind"] == "permission"):
-            self._verify(token_hash, f"gate|{gid}|{decision}|{payload}", d)
+        if not peek:
+            raise LookupError("this request is no longer open (answered at the PC?)")
+        # Deny without a note needs no fingerprint; Allow per the gate's tier; an option pick none, free text M (tiers.py).
+        self._verify(token_hash, f"gate|{gid}|{decision}|{payload}", d, tiers.answer_tier(peek, decision, payload))
         with self.lock:
             g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
             if not g:
@@ -184,8 +190,7 @@ class SessionsHub:
         """An app card: Allow only with a valid signature; Deny one tap (a signature, if sent, must still be valid)."""
         if decision not in ("allow", "deny") or payload:
             raise ValueError("an app card takes only Allow or Deny")
-        if decision == "allow" or d.get("sig"):
-            self._verify(token_hash, f"gate|{gid}|{decision}|", d)
+        self._verify(token_hash, f"gate|{gid}|{decision}|", d, "H" if decision == "allow" else "0")
         with self.lock:
             g = next((x for x in self.snap["gates"] if x["id"] == gid), None)
             if not g or g.get("kind") != "appcard":
@@ -243,20 +248,20 @@ class SessionsHub:
             state = "waiting" if q else pick["state"]
             return {"id": pick["id"], "title": pick["title"], "last": pick["last"], "state": state, "pinned": pinned,
                     "updated": pick["updated"],
-                    "gate": {"id": g["id"], "kind": g["kind"], "summary": g["summary"][:120]} if g else None,
+                    "gate": {"id": g["id"], "kind": g["kind"], "summary": g["summary"][:120], "tier": g.get("tier", "H")} if g else None,
                     "asks": ({"kind": q["kind"], "summary": q["summary"][:120]} if q and not g else None)}
 
     def send_message(self, token_hash: str, sid: str, d: dict) -> dict:
         text = str(d.get("text") or "").strip()[:4000]
         if not SID_RE.match(sid) or not text:
             raise ValueError("empty message")
-        self._verify(token_hash, f"msg|{sid}|{text}", d)
+        self._verify(token_hash, f"msg|{sid}|{text}", d, "M")
         return self._type(sid, text, "message")
 
     def start_proposal(self, token_hash: str, key: str, d: dict) -> dict:
         if not KEY_RE.match(key) or key.startswith("offer-"):
             raise ValueError("this card can only be answered in Claude Desktop or the Claude app")
-        self._verify(token_hash, f"start|{key}", d)
+        self._verify(token_hash, f"start|{key}", d, "M")
         with self.lock:
             p = next((x for x in self.snap["proposals"] if x["key"] == key), None)
         if not p:
@@ -277,7 +282,7 @@ class SessionsHub:
         auto, enabled = str(d.get("auto", "")), bool(d.get("enabled", True))
         if auto not in AUTO:
             raise ValueError("bad auto setting")
-        self._verify(token_hash, f"gate-config|{auto}|{int(enabled)}", d)
+        self._verify(token_hash, f"gate-config|{auto}|{int(enabled)}", d, "H")
         with self.lock:
             self.config = {"auto": auto, "enabled": enabled}
             self.save("gate-config.json", self.config)
@@ -293,7 +298,8 @@ class SessionsHub:
         """The open plan request that belongs to this plan Doc, if any."""
         with self.lock:
             g = next((x for x in self.snap["gates"] if x.get("kind") == "plan" and x.get("doc") == doc), None)
-            return {"id": g["id"], "session_id": g.get("session_id", ""), "session": g.get("session", ""), "created": g.get("created", 0)} if g else None
+            return {"id": g["id"], "session_id": g.get("session_id", ""), "session": g.get("session", ""), "created": g.get("created", 0),
+                    "kind": "plan", "tier": g.get("tier", "H")} if g else None
 
     def gate_docs(self) -> set:
         with self.lock:
@@ -309,7 +315,7 @@ class SessionsHub:
 
     def start_from_doc(self, token_hash: str, slug: str, text: str, d: dict) -> dict:
         """Types a request into the boss session: it starts a session for this doc (Filip's answer 6)."""
-        self._verify(token_hash, f"docstart|{slug}", d)
+        self._verify(token_hash, f"docstart|{slug}", d, "M")
         b = self.boss_session()
         if not b:
             raise LookupError("No main Claude Desktop session is open in D:\\projekty or D:\\ai-hub (or the PC is not reporting). Open one and try again.")
@@ -317,10 +323,11 @@ class SessionsHub:
         r["boss"] = b["title"]
         return r
 
-    def type_to_boss(self, text: str, kind: str = "start", token_hash: str = "", msg: str = "", d: dict = None) -> dict:
+    def type_to_boss(self, text: str, kind: str = "start", token_hash: str = "", msg: str = "", d: dict = None,
+                     tier: str = "H") -> dict:
         """Stage 11c: types [text] into the boss session. With [msg] the phone's signature over it is checked first."""
         if msg:
-            self._verify(token_hash, msg, d or {})
+            self._verify(token_hash, msg, d or {}, tier)
         b = self.boss_session()
         if not b:
             raise LookupError("No main Claude Desktop session is open in D:\\projekty or D:\\ai-hub (or the PC is not reporting). Open one and try again.")
@@ -359,8 +366,8 @@ class SessionsHub:
         g["shot_locked"] = bool(sh and not sh[0])
         return g
 
-    def _verify(self, token_hash: str, msg: str, d: dict) -> None:
-        self.claude.verify(token_hash, f"{msg}|{int(d.get('ts') or 0)}", str(d.get("sig", "")), int(d.get("ts") or 0))
+    def _verify(self, token_hash: str, msg: str, d: dict, tier: str = "H") -> None:
+        self.claude.verify(token_hash, f"{msg}|{int(d.get('ts') or 0)}", str(d.get("sig", "")), int(d.get("ts") or 0), tier=tier)
 
     def _trim_results(self) -> None:
         for k in sorted(self.results, key=lambda k: self.results[k]["at"])[:-50]:
@@ -399,7 +406,7 @@ def _card_fields(g: dict) -> dict:
 
 
 def _gate_brief(g: dict) -> dict:
-    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created", "doc", "card_title", "answerable") if k in g}
+    return {k: g[k] for k in ("id", "kind", "tool", "session_id", "session", "summary", "created", "doc", "card_title", "answerable", "tier") if k in g}
 
 
 def _summary(tool: str, inp: dict) -> str:

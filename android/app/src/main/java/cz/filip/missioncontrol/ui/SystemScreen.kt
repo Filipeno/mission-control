@@ -198,6 +198,16 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                 }
             }
             ClaudeAppCard(d.optJSONObject("claude_app"),
+                onOpenBitwarden = {
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/bitwarden/open") }
+                            Toast.makeText(ctx, "Opening Bitwarden on the PC", Toast.LENGTH_SHORT).show()
+                        } catch (e: ApiError) {
+                            Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
                 onRestart = {
                     scope.launch {
                         try {
@@ -228,7 +238,7 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun ClaudeAppCard(claude: JSONObject?, onRestart: () -> Unit, onEnableRemoteControl: (String) -> Unit) {
+private fun ClaudeAppCard(claude: JSONObject?, onOpenBitwarden: () -> Unit, onRestart: () -> Unit, onEnableRemoteControl: (String) -> Unit) {
     if (claude == null) return
     McCard {
         Label("Claude app")
@@ -264,6 +274,12 @@ private fun ClaudeAppCard(claude: JSONObject?, onRestart: () -> Unit, onEnableRe
             colors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Text)) {
             Text("Restart Claude app", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
+        Button(onClick = onOpenBitwarden, modifier = Modifier.padding(top = 10.dp), shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Text)) {
+            Text("Open Bitwarden on PC", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Text("Then pick 'Log in with device' on the PC and approve in the Bitwarden app.", color = Mc.Muted, fontSize = 13.sp,
+            modifier = Modifier.padding(top = 6.dp))
     }
     val off = claude.optJSONArray("rc_off_list") ?: return
     if (off.length() == 0) return

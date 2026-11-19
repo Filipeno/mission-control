@@ -88,7 +88,8 @@ object Notifs {
                 val pi = PendingIntent.getActivity(c, (idFor(group) and 0xfff) * 8 + 4 + i,
                     Intent(c, GateAnswerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_HISTORY)
                         .putExtra("gate", m.optString("gate")).putExtra("decision", d.first)
-                        .putExtra("summary", m.optString("summary")).putExtra("notif", idFor(group)).putExtra("gkind", m.optString("gkind")),
+                        .putExtra("summary", m.optString("summary")).putExtra("notif", idFor(group)).putExtra("gkind", m.optString("gkind"))
+                        .putExtra("tier", m.optString("tier")),
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                 b.addAction(android.app.Notification.Action.Builder(null, d.second, pi).build())
             }

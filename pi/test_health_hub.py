@@ -43,6 +43,16 @@ class HealthTests(unittest.TestCase):
     def test_restart_rate_limit(self):
         self.h.request_restart(); self.h.request_restart(); self.assertEqual(len(self.c.items), 1)
 
+    def test_bitwarden_open_queues_and_notifies(self):
+        self.h.request_bitwarden()
+        self.assertEqual(self.c.items[0]["kind"], "bitwarden-open"); self.assertTrue(self.c.items[0]["key"].startswith("bitwarden-"))
+        self.h.on_result({"key": self.c.items[0]["key"], "ok": True, "detail": "opened"})
+        self.assertEqual(self.events[0]["title"], "Bitwarden is open on the PC")
+        self.assertEqual(self.events[0]["body"], "Choose 'Log in with device' there, then approve in the Bitwarden app on this phone. Check the fingerprint phrase matches.")
+        self.h.on_result({"key": "bitwarden-1", "ok": False, "detail": "Bitwarden desktop not installed"})
+        self.assertEqual((self.events[1]["title"], self.events[1]["body"]), ("Could not open Bitwarden on the PC", "Bitwarden desktop not installed"))
+        self.assertEqual(self.h.restart.get("state", "none"), "none")
+
 
 if __name__ == "__main__":
     unittest.main()

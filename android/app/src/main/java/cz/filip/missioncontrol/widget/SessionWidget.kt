@@ -102,7 +102,7 @@ class SessionWidget : GlanceAppWidget() {
         Intent(c, GateAnswerActivity::class.java).setAction("mc.widget.${gate.optString("id")}.$decision")
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra("gate", gate.optString("id")).putExtra("decision", decision).putExtra("summary", gate.optString("summary"))
-            .putExtra("gkind", gate.optString("kind")).putExtra("tap", true).putExtra("notif", 0),
+            .putExtra("gkind", gate.optString("kind")).putExtra("tap", true).putExtra("notif", 0).putExtra("tier", gate.optString("tier")),
     )
 
     @Composable

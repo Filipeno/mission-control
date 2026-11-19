@@ -141,6 +141,31 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
         val ts = System.currentTimeMillis() / 1000
         val msg = "$id|$decision|$option|$text|$ts"
         busy = id
+        // Fingerprint option C: the Pi says what each answer needs (missing = an old Pi: always the fingerprint).
+        val t = a.optJSONObject("tiers")
+        val tier = when {
+            t == null -> "H"
+            decision == "option" && text.isEmpty() -> a.optJSONArray("options")?.let { o -> (0 until o.length()).firstOrNull { o.optString(it) == option } }
+                ?.let { t.optJSONArray("options")?.optString(it) } ?: "H"
+            decision == "reject" -> if (text.isEmpty()) t.optString("reject", "H") else t.optString("reject_text", "H")
+            else -> t.optString(decision, "H")
+        }.takeIf { it in setOf("0", "M", "H") } ?: "H"
+        if (tier == "0") {
+            busy = null
+            answered = answered + id
+            scope.launch {
+                try {
+                    val r = withContext(Dispatchers.IO) {
+                        Api.post(ctx, "/api/approvals/$id/answer", JSONObject().put("decision", decision).put("option", option).put("text", text).put("ts", ts))
+                    }
+                    Toast.makeText(ctx, if (r.optBoolean("woke_pc")) "Sent. Waking the PC…" else "Sent", Toast.LENGTH_SHORT).show()
+                } catch (e: ApiError) {
+                    answered = answered - id
+                    Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally { load() }
+            }
+            return
+        }
         scope.launch {
             try {
                 if (data?.optBoolean("has_key") != true || Signer.needsRegister(ctx)) withContext(Dispatchers.IO) { Signer.register(ctx) }
@@ -148,7 +173,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                 Toast.makeText(ctx, "Could not register the fingerprint key: ${e.message}", Toast.LENGTH_LONG).show()
                 busy = null; return@launch
             }
-            Signer.sign(act, a.optString("title"), msg) { sig, err ->
+            Signer.sign(act, a.optString("title"), msg, tier) { sig, err ->
                 if (sig == null) { busy = null; err?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }; return@sign }
                 // Fingerprint done: the card disappears now, the answer travels in the background.
                 busy = null
@@ -163,6 +188,7 @@ fun ClaudeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                         if (r.optBoolean("woke_pc")) Toast.makeText(ctx, "Waking the PC…", Toast.LENGTH_SHORT).show()
                     } catch (e: ApiError) {
                         answered = answered - id      // not delivered: the card comes back
+                        if (e.code == 403 && tier == "M") Signer.forgetWindowKey(ctx)
                         if (e.code == 403 && e.message?.contains("key") == true) runCatching { withContext(Dispatchers.IO) { Signer.register(ctx) } }
                         Toast.makeText(ctx, "Not sent: ${e.message}", Toast.LENGTH_LONG).show()
                     } finally {

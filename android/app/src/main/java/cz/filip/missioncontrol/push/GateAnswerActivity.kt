@@ -21,10 +21,10 @@ class GateAnswerActivity : FragmentActivity() {
         val summary = intent.getStringExtra("summary") ?: ""
         val notif = intent.getIntExtra("notif", 0)
         val app = applicationContext
-        val oneTapDeny = decision == "deny" && (intent.getStringExtra("gkind") == "appcard" || intent.getBooleanExtra("tap", false))
+        val oneTapDeny = decision == "deny"     // fingerprint option C: any Deny is one tap (the Pi takes an unsigned Deny)
         if (intent.getStringExtra("gkind") == "appcard" && decision != "deny" && !intent.getBooleanExtra("tap", false)) return finish()  // notification: no Allow for app cards
         if (oneTapDeny) {
-            // Claude app card (or the session widget's Deny): one tap, no fingerprint (the Pi takes an unsigned answer only as Deny).
+            // Any Deny (notification, app card, widget): one tap, no fingerprint (the Pi takes an unsigned answer only as Deny).
             app.getSystemService(NotificationManager::class.java).cancel(notif)
             toast("Deny sent to the PC")
             thread {
@@ -44,7 +44,9 @@ class GateAnswerActivity : FragmentActivity() {
             runOnUiThread {
                 if (!reg) { toast("Could not reach the Pi to register the key"); return@runOnUiThread finish() }
                 val ts = System.currentTimeMillis() / 1000
-                Signer.sign(this, (if (decision == "allow") "Allow: " else "Deny: ") + summary.take(80), "gate|$gate|$decision||$ts") { sig, err ->
+                // The Pi's tier for this Allow (fingerprint option C): "M" = the 5-minute window, else a prompt every time.
+                val tier = if (decision == "allow" && intent.getStringExtra("tier") == "M") "M" else "H"
+                Signer.sign(this, (if (decision == "allow") "Allow: " else "Deny: ") + summary.take(80), "gate|$gate|$decision||$ts", tier) { sig, err ->
                     if (sig == null) { toast(err ?: "Cancelled"); return@sign finish() }
                     // Fingerprint done: close the notification and the screen now; the answer goes out in the background.
                     val nm = app.getSystemService(NotificationManager::class.java)

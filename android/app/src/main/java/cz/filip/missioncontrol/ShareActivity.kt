@@ -104,7 +104,7 @@ class ShareActivity : FragmentActivity() {
                     val app = applicationContext
                     signedPostEx(this@ShareActivity, "Send to ${s.optString("title").take(40)}", "msg|$sid|$t", "/api/sessions/$sid/message",
                         JSONObject().put("text", t), data?.optBoolean("has_key") == true,
-                        onSigned = { Toast.makeText(app, "Sent to the PC", Toast.LENGTH_SHORT).show(); finish() }) { err ->
+                        onSigned = { Toast.makeText(app, "Sent to the PC", Toast.LENGTH_SHORT).show(); finish() }, tier = "M") { err ->
                         if (err != null) { busy = false; Toast.makeText(app, "Not sent: $err", Toast.LENGTH_LONG).show() }
                     }
                 }.padding(14.dp)) {
@@ -177,7 +177,7 @@ class ShareActivity : FragmentActivity() {
                             busy = false; Toast.makeText(this@ShareActivity, "Upload failed: ${e.message ?: "error"}", Toast.LENGTH_LONG).show(); return@launch
                         }
                         signedPostEx(this@ShareActivity, "School task: $sj".take(60), "skola|$sj|${ids.joinToString(",")}|$n", "/api/launch/skola",
-                            JSONObject().put("subject", sj).put("files", org.json.JSONArray(ids)).put("note", n), data?.optBoolean("has_key") == true, onSigned = {}) { err ->
+                            JSONObject().put("subject", sj).put("files", org.json.JSONArray(ids)).put("note", n), data?.optBoolean("has_key") == true, onSigned = {}, tier = "M") { err ->
                             busy = false
                             if (err != null) Toast.makeText(this@ShareActivity, "Not sent: $err", Toast.LENGTH_LONG).show()
                             else { Toast.makeText(this@ShareActivity, "Sent: the PC saves it and your main session starts the task", Toast.LENGTH_LONG).show(); finish() }

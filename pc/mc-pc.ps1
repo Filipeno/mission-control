@@ -6,7 +6,7 @@
 # Logins of Codex and Antigravity are read where their CLIs keep them, used in memory for one read-only
 # usage call, and never sent or saved. Only numbers leave the PC.
 # Config: mc-pc.json next to this file (git-ignored). Started by Task Scheduler (install-mc-pc.ps1).
-param([switch]$Test, [switch]$TestRestart, [switch]$TestLocalAi)   # -Test: print usage + report parts once and exit (nothing is sent)
+param([switch]$Test, [switch]$TestRestart, [switch]$TestBitwarden, [switch]$TestLocalAi)   # -Test: print usage + report parts once and exit (nothing is sent)
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $here 'mc-pc.log'
@@ -328,6 +328,8 @@ function Handle-Item($it) {
     $date = (Get-Date -Format 'yyyy-MM-dd HH:mm')
     if ($it.kind -eq 'claude-restart') {
         $r = Restart-ClaudeApp; Send-Result $it.key ([bool]$r.ok) $r.detail
+    } elseif ($it.kind -eq 'bitwarden-open') {
+        $r = Open-Bitwarden; Send-Result $it.key ([bool]$r.ok) $r.detail
     } elseif ($it.kind -eq 'pc-mode') {
         Start-ModeSwitch $it
     } elseif ($it.kind -eq 'localai-report') {
@@ -444,6 +446,56 @@ function Restart-ClaudeApp([switch]$DryRun) {
         $until = (Get-Date).AddSeconds(30); while ((Get-Date) -lt $until) { if (@(Get-ClaudeAppProcesses).Count) { return @{ ok = $true; detail = 'restarted' } }; Start-Sleep -Seconds 1 }
         return @{ ok = $false; detail = 'did not come back' }
     } catch { Write-Log "Claude restart failed: $($_.Exception.Message)"; return @{ ok = $false; detail = 'did not come back' } }
+}
+
+function Find-Bitwarden {
+    # Installer build first, then the Microsoft Store build (shell:AppsFolder AUMID). Read-only: only paths and app names.
+    foreach ($p in @("$env:LOCALAPPDATA\Programs\Bitwarden\Bitwarden.exe", "$env:ProgramFiles\Bitwarden\Bitwarden.exe")) {
+        if (Test-Path -LiteralPath $p) { return @{ kind = 'exe'; target = $p } }
+    }
+    try {
+        $pkg = Get-AppxPackage -Name '*Bitwarden*' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pkg) {
+            $app = Get-StartApps | Where-Object { $_.AppID -like "$($pkg.PackageFamilyName)!*" } | Select-Object -First 1
+            if ($app) { return @{ kind = 'aumid'; target = $app.AppID } }
+        }
+    } catch { }
+    return $null
+}
+
+function Open-Bitwarden([switch]$DryRun) {
+    # Design A (Filip): only opens / focuses Bitwarden desktop. No vault data, no secrets, fixed arguments only.
+    $found = Find-Bitwarden
+    if (-not $found) { return @{ ok = $false; detail = 'Bitwarden desktop not installed' } }
+    $locked = [bool](Get-Process LogonUI -ErrorAction SilentlyContinue)
+    $procs = @(Get-Process Bitwarden -ErrorAction SilentlyContinue)
+    if ($DryRun) { Write-Log "Bitwarden dry run: $($found.kind) $($found.target), running=$($procs.Count), locked=$locked"; return @{ ok = $true; detail = 'dry run'; kind = $found.kind; running = $procs.Count } }
+    try {
+        $focused = $false
+        $win = $procs | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($win -and -not $locked) {
+            if (-not ('McWin' -as [type])) {
+                Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class McWin {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+}
+'@
+            }
+            if ([McWin]::IsIconic($win.MainWindowHandle)) { [McWin]::ShowWindowAsync($win.MainWindowHandle, 9) | Out-Null }
+            $focused = [McWin]::SetForegroundWindow($win.MainWindowHandle)
+        }
+        if (-not $focused) {
+            # Not running, hidden in the tray, or the lock screen is up: start it (the single-instance app shows its own window).
+            if ($found.kind -eq 'exe') { Start-Process -FilePath $found.target } else { Start-Process explorer.exe "shell:AppsFolder\$($found.target)" }
+        }
+        $detail = if ($focused) { 'focused' } else { 'opened' }
+        if ($locked) { $detail = 'PC is locked (Bitwarden started, unlock the PC)' }
+        Write-Log "Bitwarden: $detail"
+        return @{ ok = $true; detail = $detail }
+    } catch { Write-Log "Bitwarden open failed: $($_.Exception.Message)"; return @{ ok = $false; detail = 'could not start Bitwarden' } }
 }
 
 $script:typeCodes = @{ 0 = 'sent'; 2 = 'bad message'; 3 = 'PC is locked'; 5 = 'there is a draft in that session''s prompt box'
@@ -971,6 +1023,7 @@ if ($Test) {
     exit
 }
 if ($TestLocalAi) { Get-LocalAiJson; exit }
+if ($TestBitwarden) { Open-Bitwarden -DryRun | ConvertTo-Json -Compress; exit }
 if ($TestRestart) { Restart-ClaudeApp -DryRun | ConvertTo-Json -Compress; exit }
 $mutex = New-Object System.Threading.Mutex($false, 'Global\mission-control-mc-pc')
 if (-not $mutex.WaitOne(0)) { exit }   # already running

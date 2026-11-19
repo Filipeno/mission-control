@@ -4,8 +4,9 @@ The PC helper (mc-pc) reports every 15 s: hub status-log tails, HANDOFF summary,
 (+ shrunk pictures), parked AIs and, every 10 min, usage numbers. Filip's answers and ideas wait here
 until mc-pc picks them up (also while the PC sleeps).
 
-Answers must be signed by the phone's fingerprint-locked KeyStore key (ECDSA P-256, SHA-256) over
-"id|decision|option|text|ts". The public key is registered once per app login token.
+Answers are signed by the phone's KeyStore keys (ECDSA P-256, SHA-256) over "id|decision|option|text|ts".
+Two keys per app login token: the every-time key (tier H) and the 5-minute window key (tier M); tiers.py says
+which answer needs which (an option pick needs none).
 """
 import base64
 import json
@@ -17,6 +18,7 @@ import time
 from pathlib import Path
 
 import p256
+import tiers
 
 ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$")
 SIG_MAX_AGE = 300          # an answer signed longer ago than this is refused
@@ -35,7 +37,9 @@ class ClaudeHub:
         self.usage = load_json("usage.json", {})                   # ai -> numbers, last good ones kept
         self.approvals = load_json("approvals.json", {})           # id -> request + status
         self.queue = load_json("pc-inbox.json", [])                # answers + ideas for mc-pc
-        self.keys = load_json("signing-keys.json", {})             # token hash -> PEM public key
+        self.keys = load_json("signing-keys.json", {})             # token hash -> every-time public key (tier H)
+        self.mkeys = load_json("signing-keys-m.json", {})          # token hash -> 5-minute window public key (tier M)
+        self.used_sigs = {}                                        # signature -> when it was used (no replay)
         (state_dir / "pictures").mkdir(parents=True, exist_ok=True)
         (state_dir / "audio").mkdir(parents=True, exist_ok=True)
 
@@ -115,32 +119,79 @@ class ClaudeHub:
 
     # ------------------------------------------------------------ from the phone
 
-    def register_key(self, token_hash: str, spki_b64: str) -> None:
+    def register_key(self, token_hash: str, spki_b64: str, slot: str = "h", proof: dict = None) -> None:
+        """Two key slots per login token (fingerprint option C):
+          "h"  every-time key: the first one per login is taken as is (the login password is the trust root);
+               replacing it needs a signature by the current one ("keyreg|h|<key>|<ts>"), else log in again.
+          "m"  5-minute window key: always needs a signature by the "h" key ("keyreg|m|<key>|<ts>").
+        Raises ValueError (bad key) or PermissionError (no valid proof)."""
+        if slot not in ("h", "m"):
+            raise ValueError("bad key slot")
         der = base64.b64decode(spki_b64)
         p256.public_point(der)   # raises ValueError unless it is a valid P-256 key
+        b64 = base64.b64encode(der).decode()
         with self.lock:
-            self.keys[token_hash] = base64.b64encode(der).decode()
-            self.save("signing-keys.json", self.keys)
+            cur = self.keys.get(token_hash) if slot == "h" else self.mkeys.get(token_hash)
+        if cur == b64:
+            return                                        # already registered (idempotent)
+        if slot == "m" or token_hash in self.keys:
+            if not self.keys.get(token_hash):
+                raise PermissionError("no fingerprint key registered for this phone")
+            p = proof or {}
+            try:
+                self.verify(token_hash, f"keyreg|{slot}|{b64}|{int(p.get('ts') or 0)}", str(p.get("sig") or ""),
+                            int(p.get("ts") or 0), tier="H")
+            except PermissionError as e:
+                raise PermissionError(f"key change needs the current fingerprint key ({e}); log out and log in again") from None
+        with self.lock:
+            if slot == "h":
+                self.keys[token_hash] = b64
+                self.mkeys.pop(token_hash, None)          # a window key was vouched for by the old key
+                self.save("signing-keys.json", self.keys)
+            else:
+                self.mkeys[token_hash] = b64
+            self.save("signing-keys-m.json", self.mkeys)
+
+    def drop_keys(self, token_hash: str) -> None:
+        """Logout: forget both keys of this login."""
+        with self.lock:
+            if self.keys.pop(token_hash, None) is not None:
+                self.save("signing-keys.json", self.keys)
+            if self.mkeys.pop(token_hash, None) is not None:
+                self.save("signing-keys-m.json", self.mkeys)
 
     def has_key(self, token_hash: str) -> bool:
         return token_hash in self.keys
 
-    def verify(self, token_hash: str, msg: str, sig_b64: str, ts: int) -> None:
-        """Raises PermissionError unless msg was signed by this phone's fingerprint key within SIG_MAX_AGE."""
-        pem = self.keys.get(token_hash)
-        if not pem:
+    def has_mkey(self, token_hash: str) -> bool:
+        return token_hash in self.mkeys
+
+    def verify(self, token_hash: str, msg: str, sig_b64: str, ts: int, tier: str = "H") -> None:
+        """Raises PermissionError unless msg was signed by this phone within SIG_MAX_AGE, by a key strong enough
+        for [tier]: "H" only the every-time key, "M" also the 5-minute window key, "0" no signature needed
+        (one that is sent must still be valid). A signature works once."""
+        if tier not in tiers.TIERS:
+            raise PermissionError("bad tier")
+        if tier == "0" and not sig_b64:
+            return
+        pems = [p for p in (self.keys.get(token_hash), self.mkeys.get(token_hash) if tier != "H" else None) if p]
+        if not self.keys.get(token_hash):
             raise PermissionError("no fingerprint key registered for this phone")
         if abs(time.time() - ts) > SIG_MAX_AGE:
             raise PermissionError("signature too old")
-        try:
-            ok = p256.verify(p256.public_point(base64.b64decode(pem)), msg.encode(), base64.b64decode(sig_b64))
-        except ValueError:
-            ok = False
+        ok = False
+        for pem in pems:
+            try:
+                ok = p256.verify(p256.public_point(base64.b64decode(pem)), msg.encode(), base64.b64decode(sig_b64))
+            except ValueError:
+                ok = False
+            if ok:
+                break
         if not ok:
-            raise PermissionError("bad signature")
+            raise PermissionError("needs a fresh fingerprint" if tier == "H" and self.mkeys.get(token_hash) else "bad signature")
         with self.lock:                                      # a signed message works once (no replay within the window)
             now = time.time()
-            self.used_sigs = {k: t for k, t in getattr(self, "used_sigs", {}).items() if now - t < SIG_MAX_AGE * 2}
+            self.used_sigs = {k: t for k, t in self.used_sigs.items() if now - t < SIG_MAX_AGE * 2}
             if sig_b64 in self.used_sigs:
                 raise PermissionError("this signed request was already used")
             self.used_sigs[sig_b64] = now
@@ -156,18 +207,11 @@ class ClaudeHub:
         ts = int(d.get("ts") or 0)
         if decision not in DECISIONS:
             raise ValueError("bad decision")
-        pem = self.keys.get(token_hash)
-        if not pem:
-            raise PermissionError("no fingerprint key registered for this phone")
-        if abs(time.time() - ts) > SIG_MAX_AGE:
-            raise PermissionError("signature too old")
-        msg = f"{aid}|{decision}|{option}|{text}|{ts}".encode()
-        try:
-            ok = p256.verify(p256.public_point(base64.b64decode(pem)), msg, base64.b64decode(str(d.get("sig", ""))))
-        except ValueError:
-            ok = False
-        if not ok:
-            raise PermissionError("bad signature")
+        with self.lock:
+            a = dict(self.approvals.get(aid) or {})
+        tier = tiers.approval_tier(a, decision, option, text)
+        # verify() also refuses a signature that was already used (the old check here let a replay through).
+        self.verify(token_hash, f"{aid}|{decision}|{option}|{text}|{ts}", str(d.get("sig", "")), ts, tier=tier)
         with self.lock:
             a = self.approvals.get(aid)
             if not a or a["status"] != "pending":
@@ -197,7 +241,7 @@ class ClaudeHub:
 
     def view(self) -> dict:
         with self.lock:
-            pend = sorted((a for a in self.approvals.values() if a["status"] == "pending"),
+            pend = sorted((dict(a, tiers=_tiers(a)) for a in self.approvals.values() if a["status"] == "pending"),
                           key=lambda a: a.get("created") or 0)
             recent = sorted((a for a in self.approvals.values() if a["status"] != "pending"),
                             key=lambda a: -(a.get("closed_at") or 0))[:5]
@@ -212,6 +256,12 @@ class ClaudeHub:
             del self.approvals[aid]
             for p in (self.dir / "pictures").glob(f"{aid}-*.jpg"):
                 p.unlink(missing_ok=True)
+
+
+def _tiers(a: dict) -> dict:
+    """What each answer to this approval needs (the app follows it; answer() checks it): see tiers.approval_tier."""
+    return {"approve": tiers.approval_tier(a, "approve", "", ""), "reject": "0", "reject_text": "M", "reply": "M",
+            "options": [tiers.approval_tier(a, "option", o, "") for o in a.get("options") or []]}
 
 
 def _clean_usage(u: dict) -> dict:

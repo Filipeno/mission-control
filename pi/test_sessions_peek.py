@@ -16,7 +16,8 @@ JPEG = bytes((255, 216)) + b"x" * 100
 class Claude:
     def __init__(self): self.items, self.verified = [], 0
     def enqueue(self, x): self.items.append(x)
-    def verify(self, *a):
+    def verify(self, *a, tier="H"):
+        if tier == "0" and not a[2]: return
         self.verified += 1
         if not a[2]: raise PermissionError("bad signature")
 
@@ -83,7 +84,7 @@ class Peek(unittest.TestCase):
         self.assertIsNone(w["gate"])
         self.assertEqual(w["asks"]["kind"], "question")
 
-    def test_unsigned_deny_only_for_plain_permission(self):
+    def test_unsigned_deny_any_gate(self):
         h = hub()
         Q = "20261118-120001-ff00"
         h.on_snapshot({"sessions": [sess(SID, "A")], "gates": [
@@ -95,8 +96,9 @@ class Peek(unittest.TestCase):
             h.answer_gate("t", HK, {"decision": "allow"})                              # Allow always needs the fingerprint
         with self.assertRaises(PermissionError):
             h.answer_gate("t", HK, {"decision": "deny", "payload": "because"})         # a note is signed
-        with self.assertRaises(PermissionError):
-            h.answer_gate("t", Q, {"decision": "deny"})                                # only permissions
+        n = h.claude.verified
+        self.assertTrue(h.answer_gate("t", Q, {"decision": "deny"})["ok"])          # option C: any Deny is one tap
+        self.assertEqual(h.claude.verified, n)
 
     def test_no_sessions_or_stale(self):
         h = hub()
