@@ -179,6 +179,23 @@ class Chat(unittest.TestCase):
         self.assertLessEqual(sum(len(m["content"]) for m in msgs), lh.CHAT_MAX_TOTAL)
         self.assertEqual((msgs[0]["role"], msgs[-1]["content"][:4]), ("user", "m30 "))
 
+    def test_history_is_passed_on_whole(self):
+        # a long assistant answer (over the user limit) is cut, not rejected; the whole history reaches the PC
+        hist = [{"role": "user", "content": "my name is Filip"},
+                {"role": "assistant", "content": "a" * (lh.CHAT_MAX_CHARS + 5000)},
+                {"role": "user", "content": "what is my name?"}]
+        rid = self.h.start_chat(hist, AI)
+        msgs = self.h.pc_chat_get(rid)["messages"]
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user"])
+        self.assertEqual(msgs[0]["content"], "my name is Filip")
+        self.assertEqual(len(msgs[1]["content"]), lh.CHAT_MAX_CHARS + 5000)
+        self.h.pc_chat_update(rid, {"text": "ok", "done": True})
+        self.clock.t += 61
+        many =[{"role": "user" if i % 2 == 0 else "assistant", "content": "m%d" % i} for i in range(301)]
+        rid = self.h.start_chat(many, AI)
+        msgs = self.h.pc_chat_get(rid)["messages"]
+        self.assertEqual((len(msgs), msgs[-1]["content"]), (lh.CHAT_MAX_MSGS - 1, "m300"))   # starts on a user turn
+
     def test_needs_ai_mode_pc_and_new_mc_pc(self):
         with self.assertRaises(lh.Busy) as e:
             self.start(mode={"mode": "gaming"})

@@ -24,3 +24,13 @@
 - `build/`, `dist/`, `*.apk` and `__pycache__/` are generated. Do not commit them.
 - The CLI build folder `build-cli` has been locked by sync tools before. Rename it and rebuild if so (WORKLOG 2026-11-14).
 - Keep `README.md` and `WORKLOG.md` as the source of project history; the repo has no CLAUDE.md or AGENTS.md.
+
+## Lessons
+- When a source file contains non-ASCII text, verify that test expectations use the intended characters rather than copying mojibake, and keep comments consistent with their assertions. (2026-11-19, 20261119-044821-c84)
+- Before accepting tests, check non-ASCII literals in expected values for mojibake, since a test can silently lock in an encoding bug. (2026-11-19, 20261119-044821-c84)
+- Before writing tests in pi/, read the sibling test file to match its style, and assert concrete expected values rather than only types. (2026-11-19, 20261119-044821-ff9)
+- When a goal restricts changes to named files, do not create memory or index files in the repo, and check the diff's file list against the goal before finishing. (2026-11-19, 20261119-044821-ff9)
+- Limit changes to the file the goal names and do not touch index or memory files like MEMORY.md unless the goal asks for it. (2026-11-19, 20261119-044822-e04)
+- Keep changes within the files the goal names, and make any summary or memory note match what the tests actually run and verify. (2026-11-19, 20261119-044822-e04)
+- Edit only the file the goal names; memory and index files like MEMORY.md are not part of a test-writing change unless the goal asks for them. (2026-11-19, 20261119-044822-4f3)
+- Only edit the files the goal names, and keep memory-index or other housekeeping edits out of task branches. (2026-11-19, 20261119-044822-4f3)

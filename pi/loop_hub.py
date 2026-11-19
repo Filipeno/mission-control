@@ -26,8 +26,9 @@ CAPS_TTL = 120            # the PC's capability list counts this long after its 
 MORNING_SLUG = "loop-morning"
 
 CHAT_MAX_CHARS = 4000     # per message
-CHAT_MAX_MSGS = 20        # the newest ones are sent to the model
-CHAT_MAX_TOTAL = 24000    # characters of the whole conversation
+CHAT_MAX_ASSISTANT = 20000   # model answers are cut to this, never rejected
+CHAT_MAX_MSGS = 200       # the newest ones are passed on; the PC trims to the running model's context
+CHAT_MAX_TOTAL = 120000   # characters of the whole conversation (RAM bound only, not the model limit)
 CHAT_PER_MIN = 12
 CHAT_TOKENS = 800
 CHAT_TIMEOUT = 120
@@ -204,7 +205,9 @@ class LoopHub:
         for m in messages[-200:]:
             if not isinstance(m, dict) or m.get("role") not in ("user", "assistant") or not isinstance(m.get("content"), str):
                 raise ValueError("bad message")
-            if len(m["content"]) > CHAT_MAX_CHARS:
+            if m["role"] == "assistant":
+                m = {"role": "assistant", "content": m["content"][:CHAT_MAX_ASSISTANT]}
+            elif len(m["content"]) > CHAT_MAX_CHARS:
                 raise ValueError("a message is longer than %d characters" % CHAT_MAX_CHARS)
             if m["content"].strip():
                 clean.append({"role": m["role"], "content": m["content"]})

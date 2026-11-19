@@ -505,6 +505,43 @@ def sse_deltas(lines):
         yield (piece or ""), (d.get("model") if isinstance(d, dict) else None)
 
 
+DEFAULT_CTX = 16384        # smallest model (gpt-oss); used when the server does not say
+CHAT_MARGIN = 300          # tokens kept free for the chat template
+
+
+def est_tokens(m):
+    """Cautious token estimate (code / Czech tokenize badly): 1 token per 2.5 chars + per-message overhead."""
+    return int(len(m.get("content") or "") / 2.5) + 8
+
+
+def trim_history(msgs, ctx, max_tokens):
+    """Drop the oldest messages until the conversation plus the answer fits ``ctx`` tokens.
+    Always keeps the last message and starts on a user turn."""
+    budget = max(int(ctx) - int(max_tokens) - CHAT_MARGIN, 256)
+    out = list(msgs)
+    while len(out) > 1 and sum(est_tokens(m) for m in out) > budget:
+        out.pop(0)
+    while len(out) > 1 and out[0].get("role") != "user":
+        out.pop(0)
+    if len(out) == 1 and est_tokens(out[0]) > budget:      # one huge message: cut its start, keep the question
+        out[0] = dict(out[0], content=out[0]["content"][-int(budget * 2.5):])
+    return out
+
+
+def server_ctx(base, cfg, open_url=urllib.request.urlopen):
+    """Per-request context of the running llama-server (/slots n_ctx, then /props); DEFAULT_CTX if unknown."""
+    for path, pick in (("/slots", lambda d: d[0].get("n_ctx") if isinstance(d, list) and d else None),
+                       ("/props", lambda d: (d.get("default_generation_settings") or {}).get("n_ctx") if isinstance(d, dict) else None)):
+        try:
+            with open_url(urllib.request.Request(base + path, headers=_llm_headers(cfg)), timeout=3) as r:
+                n = int(pick(json.loads(r.read().decode("utf-8", "replace"))) or 0)
+            if n >= 1024:
+                return n
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return DEFAULT_CTX
+
+
 def chat(rid, cfg, post=pi, open_url=urllib.request.urlopen, clock=time.monotonic, base=None):
     if not RID_RE.match(str(rid or "")):
         raise ValueError("bad chat id")
@@ -512,8 +549,9 @@ def chat(rid, cfg, post=pi, open_url=urllib.request.urlopen, clock=time.monotoni
     msgs = req.get("messages") or []
     max_tokens = int(req.get("max_tokens") or 800)
     limit = float(req.get("timeout_s") or 120)
-    body = json.dumps({"messages": msgs, "max_tokens": max_tokens, "stream": True}).encode("utf-8")
     base = (base or LLM_URL).rstrip("/")
+    msgs = trim_history(msgs, server_ctx(base, cfg, open_url), max_tokens)
+    body = json.dumps({"messages": msgs, "max_tokens": max_tokens, "stream": True}).encode("utf-8")
     text, model, start, last = "", None, clock(), 0.0
     try:
         r = open_url(urllib.request.Request(base + "/v1/chat/completions", data=body, method="POST", headers=_llm_headers(cfg)),

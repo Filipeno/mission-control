@@ -322,6 +322,37 @@ private fun ResultCard(t: String, error: Boolean, full: Int) {
 
 private class Msg(val role: String, val text: String, val error: Boolean = false, val pending: Boolean = false)
 
+private const val CHAT_KEEP_MSGS = 200          // the Pi accepts this many; the PC trims further to the running model's context
+
+/** The conversation lives only on the phone (private prefs) until Clear; the Pi keeps nothing between requests. */
+private object ChatStore {
+    private fun sp(c: android.content.Context) = c.getSharedPreferences("mc-localchat", android.content.Context.MODE_PRIVATE)
+
+    fun load(c: android.content.Context): List<Msg> = try {
+        val a = JSONArray(sp(c).getString("msgs", "[]"))
+        (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val role = o.optString("role")
+            if (role != "user" && role != "assistant") null else Msg(role, o.optString("text"), error = o.optBoolean("error"))
+        }
+    } catch (e: Exception) { emptyList() }
+
+    fun save(c: android.content.Context, msgs: List<Msg>) {
+        val a = JSONArray()
+        for (m in msgs.filter { !it.pending }.takeLast(CHAT_KEEP_MSGS))
+            a.put(JSONObject().put("role", m.role).put("text", m.text).put("error", m.error))
+        sp(c).edit().putString("msgs", a.toString()).apply()
+    }
+}
+
+/** What goes to the Pi: the whole kept conversation (errors and empty bubbles left out), newest [CHAT_KEEP_MSGS]. */
+private fun chatBody(messages: List<Msg>, newText: String): JSONArray {
+    val body = JSONArray()
+    for (m in messages.filter { !it.error && it.text.isNotBlank() }.takeLast(CHAT_KEEP_MSGS - 1))
+        body.put(JSONObject().put("role", m.role).put("content", m.text))
+    return body.put(JSONObject().put("role", "user").put("content", newText))
+}
+
 @Composable
 fun LoopChatScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifier = Modifier) {
     BackHandler(onBack = onBack)
@@ -331,7 +362,7 @@ fun LoopChatScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
     var available by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf("Checking the PC…") }
     var model by remember { mutableStateOf("") }
-    val messages = remember { mutableStateListOf<Msg>() }
+    val messages = remember { mutableStateListOf<Msg>().also { it.addAll(ChatStore.load(ctx)) } }
     var input by remember { mutableStateOf("") }
     var answering by remember { mutableStateOf(false) }
     var rid by remember { mutableStateOf<String?>(null) }
@@ -358,9 +389,7 @@ fun LoopChatScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
     fun send() {
         val text = input.trim()
         if (text.isEmpty() || answering || !available) return
-        val body = JSONArray()
-        for (m in messages) if (!m.error && m.text.isNotBlank()) body.put(JSONObject().put("role", m.role).put("content", m.text))
-        body.put(JSONObject().put("role", "user").put("content", text))
+        val body = chatBody(messages, text)
         messages += Msg("user", text, pending = true)
         val userIdx = messages.lastIndex
         input = ""
@@ -395,6 +424,7 @@ fun LoopChatScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
             } finally {
                 answering = false
                 rid = null
+                ChatStore.save(ctx, messages.filter { it.text.isNotBlank() })
             }
         }
     }
@@ -447,7 +477,7 @@ fun LoopChatScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                     colors = colors, border = BorderStroke(1.dp, Mc.Border)) { Text("Send", fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
                 if (answering) Button(onClick = ::stop, shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Warn), border = BorderStroke(1.dp, Mc.Border)) { Text("Stop", fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
-                Button(onClick = { messages.clear() }, enabled = !answering && messages.isNotEmpty(), shape = RoundedCornerShape(14.dp),
+                Button(onClick = { messages.clear(); ChatStore.save(ctx, messages) }, enabled = !answering && messages.isNotEmpty(), shape = RoundedCornerShape(14.dp),
                     colors = colors, border = BorderStroke(1.dp, Mc.Border)) { Text("Clear", fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
             }
         }

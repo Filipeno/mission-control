@@ -263,6 +263,8 @@ class Chat(unittest.TestCase):
             sent.append((m, p, b))
             return {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 800, "timeout_s": 120} if m == "GET" else {"stop": False}
         def open_url(req, timeout):
+            if "/v1/" not in req.full_url:
+                raise OSError("no /slots")
             calls.append((req.full_url, req.get_header("Authorization"), json.loads(req.data)))
             return self.Resp(self.sse("Hel", "lo"))
         t = iter(range(0, 100))
@@ -278,6 +280,8 @@ class Chat(unittest.TestCase):
             sent.append(b)
             return {"messages": [], "max_tokens": 5} if m == "GET" else {"stop": True}
         def open_url(req, timeout):
+            if "/v1/" not in req.full_url:
+                raise OSError("no /slots")
             hdr.append(req.get_header("Authorization"))
             return self.Resp(self.sse("a", "b", "c"))
         t = iter(range(0, 100))
@@ -297,6 +301,59 @@ class Chat(unittest.TestCase):
 
     def test_bad_rid(self):
         self.assertRaises(ValueError, ml.chat, "../x", {}, None)
+
+    def test_trim_history_keeps_newest_and_user_start(self):
+        msgs = []
+        for i in range(40):
+            msgs.append({"role": "user", "content": "q%d " % i + "x" * 2000})
+            msgs.append({"role": "assistant", "content": "a%d " % i + "y" * 2000})
+        msgs.append({"role": "user", "content": "last question"})
+        for ctx in (24576, 16384):
+            out = ml.trim_history(msgs, ctx, 800)
+            self.assertEqual(out[-1]["content"], "last question")
+            self.assertEqual(out[0]["role"], "user")
+            self.assertLessEqual(sum(ml.est_tokens(m) for m in out), ctx - 800 - ml.CHAT_MARGIN)
+            self.assertGreater(len(out), 10)                                     # not just the last message
+            names = [m["content"][:3] for m in out[:-1]]
+            self.assertEqual(names, [m["content"][:3] for m in msgs[len(msgs) - 1 - len(out) + 1:-1]])  # contiguous newest tail
+        self.assertGreater(len(ml.trim_history(msgs, 24576, 800)), len(ml.trim_history(msgs, 16384, 800)))
+
+    def test_trim_history_small_untouched_and_huge_single(self):
+        small = [{"role": "user", "content": "my name is Filip"}, {"role": "assistant", "content": "ok"},
+                 {"role": "user", "content": "what is my name?"}]
+        self.assertEqual(ml.trim_history(small, 16384, 800), small)
+        huge = ml.trim_history([{"role": "user", "content": "z" * 100000}], 16384, 800)
+        self.assertEqual(len(huge), 1)
+        self.assertLess(ml.est_tokens(huge[0]), 16384)
+
+    def test_server_ctx_and_history_reaches_model(self):
+        def open_url(req, timeout):
+            if req.full_url.endswith("/slots"):
+                return self.Json([{"id": 0, "n_ctx": 4096}])
+            return self.Resp(self.sse("ok"))
+        self.assertEqual(ml.server_ctx("http://l", {}, open_url), 4096)
+        self.assertEqual(ml.server_ctx("http://l", {}, lambda r, timeout: (_ for _ in ()).throw(OSError())), ml.DEFAULT_CTX)
+        hist = [{"role": "user", "content": "u%d " % i + "x" * 1500} if i % 2 == 0 else
+                {"role": "assistant", "content": "a%d " % i + "y" * 1500} for i in range(30)] + [{"role": "user", "content": "now"}]
+        sent = []
+        def post(cfg, m, p, b=None):
+            return {"messages": hist, "max_tokens": 800} if m == "GET" else {"stop": False}
+        def open2(req, timeout):
+            if req.full_url.endswith("/slots"):
+                return self.Json([{"n_ctx": 8192}])
+            sent.append(json.loads(req.data)["messages"])
+            return self.Resp(self.sse("ok"))
+        t = iter(range(0, 100))
+        ml.chat("0123456789abcdef", {}, post, open2, clock=lambda: float(next(t)), base="http://l")
+        self.assertEqual(sent[0][-1]["content"], "now")
+        self.assertGreater(len(sent[0]), 3)                                      # history, not only the last message
+        self.assertLess(len(sent[0]), len(hist))                                 # trimmed from the oldest end to the small ctx
+
+    class Json:
+        def __init__(self, obj): self.b = json.dumps(obj).encode()
+        def read(self): return self.b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
 
 
 class TablesToCardsTest(unittest.TestCase):
