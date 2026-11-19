@@ -2,6 +2,7 @@ package cz.filip.missioncontrol.ui
 
 import android.graphics.BitmapFactory
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -87,6 +88,7 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
     var full by remember { mutableStateOf(false) }
     var moreTimeline by remember { mutableStateOf(false) }
     var reportSlug by remember { mutableStateOf<String?>(null) }
+    var sub by remember { mutableStateOf<String?>(null) }          // "tasks", "task:<id>", "chat"
 
     suspend fun loadShot() {
         shot = withContext(Dispatchers.IO) {
@@ -128,7 +130,20 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
         }
     }
 
+    fun backFromSub() {
+        sub = if (sub?.startsWith("task:") == true) "tasks" else null     // a task (also one opened from the card) -> the list
+    }
+    BackHandler(enabled = sub != null && reportSlug == null) { backFromSub() }
+
     reportSlug?.let { slug -> DocDetailScreen(slug, onBack = { reportSlug = null }, modifier = modifier); return }
+    sub?.let { s ->
+        when {
+            s == "tasks" -> LoopTasksScreen(onBack = ::backFromSub, onOpen = { sub = "task:$it" }, onLoggedOut = onLoggedOut, modifier = modifier)
+            s.startsWith("task:") -> LoopTaskScreen(s.removePrefix("task:"), onBack = ::backFromSub, onLoggedOut = onLoggedOut, modifier = modifier)
+            else -> LoopChatScreen(onBack = ::backFromSub, onLoggedOut = onLoggedOut, modifier = modifier)
+        }
+        return
+    }
 
     PullToRefreshBox(
         isRefreshing = refreshing,
@@ -171,7 +186,9 @@ fun SystemScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modi
                     }
                 }
             })
-            LocalAiCard(active = resumed, onOpenReport = { reportSlug = it }, onLoggedOut = onLoggedOut)
+            LocalAiCard(active = resumed, onOpenReport = { reportSlug = it },
+                onOpenThinks = { id -> sub = if (id != null) "task:$id" else "tasks" },
+                onOpenChat = { sub = "chat" }, onLoggedOut = onLoggedOut)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PiTile(d.optJSONObject("pi"), Modifier.weight(1f))
                 MiniTile(d.optJSONObject("mini_pc"), Modifier.weight(1f))

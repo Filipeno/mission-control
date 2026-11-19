@@ -8,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -179,12 +181,35 @@ private fun ago(unixS: Double): String {
 
 /** Live "Local AI" card. Refreshes every 5 s while it is on screen (the Pi then tells mc-pc to report faster). */
 @Composable
-fun LocalAiCard(active: Boolean, onOpenReport: (String) -> Unit, onLoggedOut: () -> Unit) {
+fun LocalAiCard(active: Boolean, onOpenReport: (String) -> Unit, onOpenThinks: (String?) -> Unit, onOpenChat: () -> Unit, onLoggedOut: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var d by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var wantReport by remember { mutableStateOf(0.0) }          // unix time of the tap, 0 = not waiting
+    var wantMorning by remember { mutableStateOf(0.0) }         // same for the morning summary
+
+    LaunchedEffect(wantMorning) {
+        val t0 = wantMorning
+        if (t0 <= 0) return@LaunchedEffect
+        while (wantMorning == t0) {
+            delay(1500)
+            try {
+                val m = withContext(Dispatchers.IO) { Api.get(ctx, "/api/system/loop/morning") }
+                val reqAt = m.num("requested_at") ?: 0.0
+                val st = m.optString("state")
+                if (st == "done" && reqAt >= t0 - 5) { wantMorning = 0.0; onOpenReport(m.optString("slug").ifBlank { "loop-morning" }); return@LaunchedEffect }
+                if (st == "failed" && reqAt >= t0 - 5) {
+                    wantMorning = 0.0; Toast.makeText(ctx, m.optString("detail").ifBlank { "Could not get the summary" }, Toast.LENGTH_LONG).show(); return@LaunchedEffect
+                }
+            } catch (e: ApiError) {
+                if (e.code == 401) { wantMorning = 0.0; onLoggedOut(); return@LaunchedEffect }
+            }
+            if (System.currentTimeMillis() / 1000.0 - t0 > 45) {
+                wantMorning = 0.0; Toast.makeText(ctx, "The PC did not answer", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     LaunchedEffect(active) {
         while (active) {
@@ -274,23 +299,77 @@ fun LocalAiCard(active: Boolean, onOpenReport: (String) -> Unit, onLoggedOut: ()
         if (agent == null) {
             Text("No loop running", color = Mc.Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
         } else {
-            Text(agent.optString("task"), color = Mc.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
-            val bits = listOfNotNull(agent.optString("step").takeIf { it.isNotBlank() }?.let { "step $it" },
-                "iteration ${agent.optInt("iteration")}", agent.num("started")?.let { "started ${clock(it)}" },
+            val updated = agent.num("updated")
+            val stuck = updated != null && System.currentTimeMillis() / 1000.0 - updated > 300
+            Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 8.dp)) {
+                Text(agent.optString("task").removePrefix(agent.optString("id").takeIf { it.isNotBlank() && it != "null" }?.let { "$it: " } ?: ""), color = Mc.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                val chipColor = if (stuck) Mc.Warn else Mc.Accent
+                Text(if (stuck) "stuck" else "running", color = chipColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(Mc.ButtonDark).padding(horizontal = 10.dp, vertical = 4.dp))
+            }
+            val rounds = agent.optInt("rounds")
+            val bits = listOfNotNull(
+                if (rounds > 0) "round ${agent.optInt("iteration")}/$rounds" else "round ${agent.optInt("iteration")}",
+                agent.optString("step").takeIf { it.isNotBlank() }?.let { "step $it" },
+                agent.num("started")?.let { "started ${clock(it)}" },
                 agent.num("eta")?.let { "ETA ${clock(it)}" })
-            Text(bits.joinToString(" · "), color = Mc.Muted, fontSize = 13.sp)
+            Text(bits.joinToString(" · "), color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
+            val st = agent.num("started"); val eta = agent.num("eta")
+            if (st != null && eta != null && eta > st) {
+                val frac = ((System.currentTimeMillis() / 1000.0 - st) / (eta - st)).toFloat().coerceIn(0.02f, 1f)
+                LinearProgressIndicator(progress = { frac }, color = if (stuck) Mc.Warn else Mc.Accent, trackColor = Mc.ButtonDark,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(5.dp).clip(RoundedCornerShape(3.dp)))
+            }
             agent.optJSONObject("last_check")?.let { lc ->
                 val ok = lc.optBoolean("ok")
-                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.Top) {
-                    Text(if (ok) "✓" else "✗", color = if (ok) Mc.Good else Mc.Bad, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
+                    Box(Modifier.padding(top = 4.dp).size(10.dp).clip(CircleShape).background(if (ok) Mc.Good else Mc.Bad))
                     Spacer(Modifier.width(8.dp))
                     Column {
                         Text(lc.optString("cmd"), color = Mc.Text, fontSize = 13.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         lc.num("at")?.let { Text("last check ${ago(it)}", color = Mc.Muted, fontSize = 13.sp) }
+                        agent.optString("check_line").takeIf { it.isNotBlank() }?.let {
+                            Text(it, color = Mc.Muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
             }
+        }
+        // ---- loop footer buttons
+        val loopViews = v.optBoolean("loop_views")
+        val chat = v.optJSONObject("chat")
+        val chatOk = chat?.optBoolean("available") == true
+        val btnColors = ButtonDefaults.buttonColors(containerColor = Mc.ButtonDark, contentColor = Mc.Accent,
+            disabledContainerColor = Mc.ButtonDark, disabledContentColor = Mc.Muted)
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (loopViews) {
+                Button(onClick = { onOpenThinks(agent?.optString("id")?.takeIf { it.isNotBlank() }) }, shape = RoundedCornerShape(14.dp),
+                    colors = btnColors, border = BorderStroke(1.dp, Mc.Border)) {
+                    Text("How it thinks", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = {
+                        wantMorning = System.currentTimeMillis() / 1000.0
+                        scope.launch {
+                            try { withContext(Dispatchers.IO) { Api.post(ctx, "/api/system/loop/morning") } }
+                            catch (e: ApiError) {
+                                wantMorning = 0.0
+                                if (e.code == 401) onLoggedOut() else Toast.makeText(ctx, e.message, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    enabled = wantMorning <= 0, shape = RoundedCornerShape(14.dp), colors = btnColors, border = BorderStroke(1.dp, Mc.Border),
+                ) { Text(if (wantMorning > 0) "Fetching…" else "Morning summary", fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+            }
+            Button(onClick = onOpenChat, enabled = chatOk, shape = RoundedCornerShape(14.dp), colors = btnColors, border = BorderStroke(1.dp, Mc.Border)) {
+                Text("Chat", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        if (!chatOk) chat?.optString("reason")?.takeIf { it.isNotBlank() }?.let {
+            Text(it, color = Mc.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
         }
         val log = job?.optJSONObject("log")
         if (log != null) {

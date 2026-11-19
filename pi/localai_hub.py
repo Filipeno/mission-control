@@ -50,7 +50,10 @@ def clean_snapshot(d):
                   "iteration": int(_num(agent.get("iteration")) or 0),
                   "last_check": {"cmd": _text(lc.get("cmd"), 200), "ok": lc.get("ok") is True, "at": _num(lc.get("at"))} if lc else None,
                   "started": _num(agent.get("started")), "eta": _num(agent.get("eta")),
-                  "updated": _num(agent.get("updated"))} if agent else None,
+                  "updated": _num(agent.get("updated")),
+                  # 0.20: the task id (opens "How it thinks"), planned rounds, last line of the check output
+                  "id": _text(agent.get("id"), 20), "rounds": int(_num(agent.get("rounds")) or 0),
+                  "check_line": _text(agent.get("check_line"), 200)} if agent else None,
         "report_exists": rep.get("exists") is True,
         "report_at": _num(rep.get("at")),
     }

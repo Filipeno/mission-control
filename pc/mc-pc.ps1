@@ -2,11 +2,12 @@
 #  - every 5 s : asks mc-pi for commands (sleep) and for Filip's answers and ideas; writes them into D:\ai-hub
 #  - every 15 s: sends a report: hub status-log tails, HANDOFF summary, pending approvals (+ pictures), parked AIs
 #  - every ~5 s while the phone shows the Local AI card (or a PC mode switch runs): Local AI snapshot (mc_localai.py)
+#  - on request from the phone: loop task list / transcripts / morning summary, chat with the local model (mc_loop.py)
 #  - every 10 min: usage numbers for Claude, Codex, Gemini, Antigravity
 # Logins of Codex and Antigravity are read where their CLIs keep them, used in memory for one read-only
 # usage call, and never sent or saved. Only numbers leave the PC.
 # Config: mc-pc.json next to this file (git-ignored). Started by Task Scheduler (install-mc-pc.ps1).
-param([switch]$Test, [switch]$TestRestart, [switch]$TestBitwarden, [switch]$TestLocalAi)   # -Test: print usage + report parts once and exit (nothing is sent)
+param([switch]$Test, [switch]$TestRestart, [switch]$TestBitwarden, [switch]$TestLocalAi, [switch]$TestLoop)   # -Test: print usage + report parts once and exit (nothing is sent)
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $here 'mc-pc.log'
@@ -639,6 +640,28 @@ function Send-LocalAiReport($it) {
     Send-Result $it.key $true "$($r.slug)"
 }
 
+# ------------------------------------------------------------------ loop views + local chat (0.20, mc_loop.py)
+# The Pi hands out requests in the command reply (loop_req / chat_req). mc_loop.py reads D:\ai-hub\loop, redacts and
+# POSTs the answer itself; a chat runs hidden in its own process so this loop never waits for the model.
+function Invoke-LoopRequest($it) {
+    $kind = "$($it.kind)"; $id = "$($it.id)"; $n = 0
+    if (@('tasks', 'task', 'round', 'morning') -notcontains $kind) { return }
+    if ($kind -in @('task', 'round') -and $id -notmatch '^\d{8}-\d{6}-[0-9a-f]{3}$') { return }
+    if ($kind -eq 'round' -and -not [int]::TryParse("$($it.n)", [ref]$n)) { return }
+    $py = Get-PythonExe; if (-not $py) { Write-Log 'loop: python not found'; return }
+    $env:MC_ITEM = ConvertTo-Json @{ key = "$($it.key)"; kind = $kind; id = $id; n = $n } -Compress; $env:MC_HUB = $Hub
+    try { $r = (& $py -I (Join-Path $here 'mc_loop.py') serve 2>$null | Out-String) } finally { Remove-Item Env:MC_ITEM,Env:MC_HUB -ErrorAction SilentlyContinue }
+    if ($LASTEXITCODE -ne 0) { Write-Log "loop $kind $id $($it.n): exit $LASTEXITCODE" }
+}
+
+function Start-LoopChat($it) {
+    $rid = "$($it.rid)"
+    if ($rid -notmatch '^[0-9a-f]{16}$') { return }
+    $py = Get-PythonExe; if (-not $py) { Write-Log 'chat: python not found'; return }
+    Start-Process -FilePath $py -ArgumentList @('-I', "`"$(Join-Path $here 'mc_loop.py')`"", 'chat', $rid) -WindowStyle Hidden | Out-Null
+    Write-Log "chat $rid started (local model)"
+}
+
 function Send-Sessions($watch) {
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $py) { return }
@@ -1023,6 +1046,7 @@ if ($Test) {
     exit
 }
 if ($TestLocalAi) { Get-LocalAiJson; exit }
+if ($TestLoop) { $env:MC_HUB = $Hub; & (Get-PythonExe) -I (Join-Path $here 'mc_loop.py') test; exit }
 if ($TestBitwarden) { Open-Bitwarden -DryRun | ConvertTo-Json -Compress; exit }
 if ($TestRestart) { Restart-ClaudeApp -DryRun | ConvertTo-Json -Compress; exit }
 $mutex = New-Object System.Threading.Mutex($false, 'Global\mission-control-mc-pc')
@@ -1047,6 +1071,8 @@ while ($true) {
         if ($reply.digest) { try { Send-Digest } catch { Write-Log "digest: $($_.Exception.Message)" } }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
         try { Check-ModeJob } catch { Write-Log "pc-mode job: $($_.Exception.Message)" }
+        foreach ($c in @($reply.chat_req)) { if ($c) { try { Start-LoopChat $c } catch { Write-Log "chat: $($_.Exception.Message)" } } }
+        foreach ($q in @($reply.loop_req)) { if ($q) { try { Invoke-LoopRequest $q } catch { Write-Log "loop: $($_.Exception.Message)" } } }
         if ($reply.ai_watch -and (Get-Date) -ge $script:nextLocalAi) {
             try { Send-LocalAi } catch { Write-Log "localai: $($_.Exception.Message)" }
             $script:nextLocalAi = (Get-Date).AddSeconds(4)
@@ -1057,7 +1083,7 @@ while ($true) {
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
-                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions); pcmode = (Get-PcModeReport) } | Out-Null
+                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions); pcmode = (Get-PcModeReport); caps = @('loop', 'chat') } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }

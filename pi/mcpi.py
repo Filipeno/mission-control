@@ -40,6 +40,7 @@ from todo_hub import TodoHub
 from system_hub import SystemHub
 from health_hub import HealthHub
 from localai_hub import LocalAiHub
+from loop_hub import Busy, Limited, LoopHub
 from ai_hub import AiHub
 from launch_hub import LaunchHub, MAX_UPLOAD
 
@@ -425,6 +426,7 @@ class AppState:
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
         self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
         self.localai = LocalAiHub(self.claude)
+        self.loop = LoopHub()
         self.ai = AiHub(load_json, save_json, self.deliver, self.claude, self.todos, self.docs,
                         lambda: self.settings, lambda: in_quiet(self.settings, datetime.now()))
 
@@ -727,6 +729,11 @@ def make_app(state: AppState):
             out["digest"] = True
         if state.localai.watching():
             out["ai_watch"] = True
+        loop_req, chat_req = state.loop.pc_requests(), state.loop.pc_chat_requests()
+        if loop_req:
+            out["loop_req"] = loop_req
+        if chat_req:
+            out["chat_req"] = chat_req
         if state.system.take_shot_request():
             out["screenshot"] = True
         if state.sleep_cmd_at and time.time() - state.sleep_cmd_at < SLEEP_CMD_TTL:
@@ -748,6 +755,7 @@ def make_app(state: AppState):
         state.system.on_pc_report(d.get("stats"))
         state.health.on_pc_report(d.get("health"))
         state.localai.on_mode(d.get("pcmode"))
+        state.loop.on_caps(d.get("caps"))
         state.ai.on_pc_questions(d.get("questions"))
         for a in state.claude.on_report(d):
             state.deliver({"at": time.time(), "kind": "approval", "cat": "claude",
@@ -1386,6 +1394,8 @@ def make_app(state: AppState):
         need_app(req)
         v = state.localai.view()
         v["pc_online"] = time.time() - state.helper_at < HELPER_STALE
+        v["loop_views"] = state.loop.supports("loop")
+        v["chat"] = state.loop.chat_status(v["mode"], v["pc_online"])
         return v
 
     @app.post("/api/system/pc-mode")
@@ -1408,6 +1418,81 @@ def make_app(state: AppState):
             raise HTTPException(409, "PC helper not connected (is the PC on?)")
         state.localai.request_report()
         return {"ok": True}
+
+    # ------------------------------------------------------------ loop views + local chat (0.20, pi/loop_hub.py)
+    def loop_call(fn):
+        try:
+            return fn()
+        except Busy as e:
+            raise HTTPException(409, str(e))
+        except Limited as e:
+            raise HTTPException(429, str(e))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+
+    def helper_online():
+        return time.time() - state.helper_at < HELPER_STALE
+
+    @app.get("/api/system/loop/tasks")
+    def loop_tasks(req: Request):
+        need_app(req)
+        return loop_call(lambda: state.loop.view("tasks", pc_online=helper_online()))
+
+    @app.get("/api/system/loop/tasks/{tid}")
+    def loop_task(req: Request, tid: str):
+        need_app(req)
+        return loop_call(lambda: state.loop.view("task", tid, pc_online=helper_online()))
+
+    @app.get("/api/system/loop/tasks/{tid}/round/{n}")
+    def loop_round(req: Request, tid: str, n: int):
+        need_app(req)
+        return loop_call(lambda: state.loop.view("round", tid, n, pc_online=helper_online()))
+
+    @app.post("/api/system/loop/morning")
+    def loop_morning(req: Request):
+        need_app(req)
+        loop_call(lambda: state.loop.request_morning(pc_online=helper_online()))
+        return {"ok": True}
+
+    @app.get("/api/system/loop/morning")
+    def loop_morning_view(req: Request):
+        need_app(req)
+        return state.loop.morning_view()
+
+    @app.post("/api/system/localai/chat")
+    def localai_chat(req: Request, d: dict = Body(default={})):
+        need_app(req)
+        rid = loop_call(lambda: state.loop.start_chat(d.get("messages"), state.localai.mode_view(), pc_online=helper_online()))
+        return {"ok": True, "rid": rid}
+
+    @app.get("/api/system/localai/chat/{rid}")
+    def localai_chat_view(req: Request, rid: str):
+        need_app(req)
+        return loop_call(lambda: state.loop.chat_view(rid))
+
+    @app.post("/api/system/localai/chat/{rid}/stop")
+    def localai_chat_stop(req: Request, rid: str):
+        need_app(req)
+        loop_call(lambda: state.loop.stop_chat(rid))
+        return {"ok": True}
+
+    @app.post("/api/pc/loop")
+    def pc_loop(req: Request, d: dict = Body(default={})):
+        need_pc(req)
+        loop_call(lambda: state.loop.on_data(d))
+        return {"ok": True}
+
+    @app.get("/api/pc/chat/{rid}")
+    def pc_chat_get(req: Request, rid: str):
+        need_pc(req)
+        return loop_call(lambda: state.loop.pc_chat_get(rid))
+
+    @app.post("/api/pc/chat/{rid}")
+    def pc_chat_update(req: Request, rid: str, d: dict = Body(default={})):
+        need_pc(req)
+        return loop_call(lambda: state.loop.pc_chat_update(rid, d))
 
     @app.post("/api/system/claude/restart")
     def system_claude_restart(req: Request):

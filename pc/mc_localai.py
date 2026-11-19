@@ -348,13 +348,26 @@ def _state_file():
     return Path(tempfile.gettempdir()) / "mc-localai-state.json"
 
 
+def agent_extra(agent, hub=None):
+    """0.20: id, planned rounds and last check-output line of the running loop task (mc_loop.agent_extra)."""
+    if not agent:
+        return agent
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))      # -I leaves the script folder out of sys.path
+        import mc_loop
+        agent.update(mc_loop.agent_extra(agent.get("task"), hub))
+    except Exception:                                                 # noqa: BLE001 - the card works without it
+        pass
+    return agent
+
+
 def snapshot(now=None, prev=None, hub=None, llm=None, get=_get):
     now = time.time() if now is None else now
     srv, mem = server_state(prev, now, get=get)
     log = newest_log(logs_dir(llm))
     out = {"at": now, "mode": read_mode(mode_path(hub)), "server": srv, "gpu": gpu_stats(),
            "cpu_pct": cpu_percent(), "ram": ram_stats(),
-           "job": {"log": log, "agent": read_status(status_path(hub), now)},
+           "job": {"log": log, "agent": agent_extra(read_status(status_path(hub), now), hub)},
            "report": report_info(report_path(hub))}
     return out, mem
 
