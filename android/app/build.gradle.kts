@@ -23,8 +23,8 @@ android {
         applicationId = "cz.filip.missioncontrol"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.20.1"
+        versionCode = 29
+        versionName = "0.21.0"
         // -PpublicBuild (tools/release.ps1): no addresses inside the APK, because it is published on GitHub.
         val publicBuild = project.hasProperty("publicBuild")
         buildConfigField("String", "PI_URL", "\"${if (publicBuild) "" else mcLocal.getProperty("mc.piUrl", "")}\"")

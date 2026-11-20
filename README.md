@@ -2,7 +2,8 @@
 
 A native Android control panel (Kotlin + Jetpack Compose) for a home setup: wake and sleep a PC, watch and steer
 Claude Code sessions, answer their questions and permission requests with a fingerprint, docs and checklists,
-and a system overview.
+and a system overview. A second host, the laptop, has its own tile (wake, open an app on the PC, mode,
+clipboard, notifications): see `docs/laptop-host.md`.
 
 | Folder | What it is |
 |---|---|
