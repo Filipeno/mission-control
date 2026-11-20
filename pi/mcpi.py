@@ -72,6 +72,7 @@ SERVICES = ["pc-waker", "mission-control", "cloudflared", "bp-gateway"]   # ntfy
 LOGIN_WINDOW, LOGIN_MAX_FAILS = 15 * 60, 5
 HELPER_STALE = 30          # PC helper polls every 5 s; older than this = not connected
 SLEEP_CMD_TTL = 60         # a queued sleep that the helper did not pick up in time is dropped
+PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded", "cf-connecting-ip", "cf-ray", "x-forwarded-host")
 ACTION_PATHS = {"/api/stay-awake", "/api/autosleep"}   # buttons in notifications may call these
 SETTINGS_DEFAULTS = {
     "muted": False,
@@ -585,6 +586,10 @@ def make_app(state: AppState):
     def need_host(req: Request) -> str:
         """The host id that owns the bearer token. LAN / VPN only (HOST_ALLOW_NETS); loopback, which is what a tunnel
         connector on the Pi looks like, and everything else is refused before the token is even looked at."""
+        # uvicorn rewrites req.client from X-Forwarded-For when the peer is loopback (a tunnel connector), so a tunnelled
+        # request could claim a LAN address. Anything that carries proxy headers is therefore refused outright.
+        if any(h in req.headers for h in PROXY_HEADERS):
+            raise HTTPException(403, "not reachable from this network")
         ip = req.client.host if req.client else ""
         if not state.hosts.net_ok(ip):
             raise HTTPException(403, "not reachable from this network")

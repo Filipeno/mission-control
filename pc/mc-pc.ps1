@@ -333,6 +333,8 @@ function Handle-Item($it) {
         $r = Open-Bitwarden; Send-Result $it.key ([bool]$r.ok) $r.detail
     } elseif ($it.kind -eq 'pc-mode') {
         Start-ModeSwitch $it
+    } elseif ($it.kind -in @('laptop-open', 'laptop-mode', 'laptop-clip')) {
+        Start-LaptopJob $it
     } elseif ($it.kind -eq 'localai-report') {
         try { Send-LocalAiReport $it } catch { Send-Result $it.key $false $_.Exception.Message }
     } elseif ($it.kind -eq 'rc-queue') {
@@ -638,6 +640,133 @@ function Send-LocalAiReport($it) {
     $text = [IO.File]::ReadAllText($file, $utf8)
     $r = Api 'Post' '/api/pc/docs/upload' @{ kind = 'doc'; name = 'local-agent-trials-report.md'; text = $text; source = $file; title = 'Local agent trials report' }
     Send-Result $it.key $true "$($r.slug)"
+}
+
+# ------------------------------------------------------------------ laptop as second host (0.21, mc_laptop.py)
+# The phone's Open app / mode / clipboard run FIXED scripts of the pc-laptop repo on this PC. Only values from fixed
+# lists reach them: the mode from a list, the app name only when mc_laptop.py finds it exactly in laptop-apps.json (and
+# it is passed as one quoted argument); the clipboard text never travels (the result only says "sent N chars").
+# A PC running an older mc-pc acks these kinds without doing anything: deploy mc-pc first, then mc-pi (the Pi only
+# offers the actions once this helper reports the "laptop" capability).
+$script:LaptopPc = 'D:\projekty\pc-laptop\pc'
+$script:laptopJob = $null            # @{ key; proc; out; action; mode; started }
+$script:laptopStatusJob = $null      # a `laptop-mode.ps1 status -Json` run: @{ proc; out; started }
+$script:laptopStatusText = ''
+$script:laptopStatusAt = [datetime]::MinValue
+$script:nextLaptopStatus = Get-Date
+
+function Test-LaptopScripts {
+    foreach ($n in 'open-on-laptop.ps1', 'laptop-mode.ps1', 'clip.ps1') { if (-not (Test-Path -LiteralPath (Join-Path $script:LaptopPc $n))) { return $false } }
+    $true
+}
+
+function Invoke-LaptopPy([string]$verb, [hashtable]$vars) {
+    # mc_laptop.py gets its values in environment variables, never on the command line. $null when anything fails.
+    $py = Get-PythonExe; if (-not $py) { return $null }
+    foreach ($k in $vars.Keys) { Set-Item -Path "Env:$k" -Value ([string]$vars[$k]) }
+    try { return ((& $py -I (Join-Path $here 'mc_laptop.py') $verb 2>$null | Out-String) | ConvertFrom-Json) }
+    catch { return $null }
+    finally { foreach ($k in $vars.Keys) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } }
+}
+
+function Get-LaptopReport {
+    # The `laptop` block of the report: mode / apps / monitor stream. $null when this helper cannot produce it.
+    try {
+        $st = ''; if (((Get-Date) - $script:laptopStatusAt).TotalSeconds -lt 180) { $st = $script:laptopStatusText }
+        $r = Invoke-LaptopPy 'report' @{ MC_STATUS = $st }
+        if ($r -and $r.mode) { return $r }
+    } catch { }
+    $null
+}
+
+function Update-LaptopStatus {
+    # `laptop-mode.ps1 status -Json` takes a few seconds: run it hidden every 60 s and pick the answer up on a later loop.
+    $j = $script:laptopStatusJob
+    if ($j) {
+        if ($j.proc.HasExited) {
+            $t = ''; try { $t = Get-Content -LiteralPath $j.out -Raw -ErrorAction SilentlyContinue } catch { }
+            Remove-Item -LiteralPath $j.out -ErrorAction SilentlyContinue
+            if ($j.proc.ExitCode -eq 0 -and "$t".Trim()) { $script:laptopStatusText = "$t"; $script:laptopStatusAt = Get-Date }
+            $script:laptopStatusJob = $null
+        } elseif (((Get-Date) - $j.started).TotalSeconds -gt 40) {
+            Stop-Process -Id $j.proc.Id -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $j.out -ErrorAction SilentlyContinue
+            $script:laptopStatusJob = $null
+        }
+        return
+    }
+    if ((Get-Date) -lt $script:nextLaptopStatus) { return }
+    $script:nextLaptopStatus = (Get-Date).AddSeconds(60)
+    $script = Join-Path $script:LaptopPc 'laptop-mode.ps1'
+    $pw = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $pw -or -not (Test-Path -LiteralPath $script)) { return }
+    $out = Join-Path $env:TEMP 'mc-pc-laptop-status.txt'
+    $p = Start-Process -FilePath $pw.Source -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script`"", '-Mode', 'status', '-Json') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out
+    $null = $p.Handle
+    $script:laptopStatusJob = @{ proc = $p; out = $out; started = Get-Date }
+}
+
+function Start-LaptopJob($it) {
+    # ONE laptop job at a time. Hidden pwsh, output to a temp file, polled by Check-LaptopJob (90 s limit).
+    $kind = "$($it.kind)"
+    if ($script:laptopJob -and -not $script:laptopJob.proc.HasExited) { Send-Result $it.key $false 'a laptop job is already running'; return }
+    $pw = Get-Command pwsh -ErrorAction SilentlyContinue
+    if (-not $pw) { Send-Result $it.key $false 'pwsh (PowerShell 7) not found on the PC'; return }
+    $base = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')
+    $mode = ''
+    if ($kind -eq 'laptop-open') {
+        $action = 'open'; $file = Join-Path $script:LaptopPc 'open-on-laptop.ps1'; $app = "$($it.app)"
+        $ok = Invoke-LaptopPy 'app-ok' @{ MC_APP = $app }
+        if (-not $ok -or $ok.ok -ne $true) { Send-Result $it.key $false 'app is not in the laptop app list'; return }
+        $a = $base + @("`"$file`"", '-App', "`"$app`"", '-Json')
+    } elseif ($kind -eq 'laptop-mode') {
+        $mode = "$($it.mode)"
+        if (@('monitor', 'app', 'own', 'auto') -cnotcontains $mode) { Send-Result $it.key $false 'bad mode request'; return }
+        $action = if ($mode -eq 'auto') { 'auto' } else { 'mode' }
+        $file = Join-Path $script:LaptopPc 'laptop-mode.ps1'
+        # `auto -Json` only prints signals; plain `auto` starts the watcher (or just clears the manual override when one runs)
+        $a = $base + @("`"$file`"", '-Mode', $mode); if ($mode -ne 'auto') { $a += '-Json' }
+    } elseif ($kind -eq 'laptop-clip') {
+        $action = 'clip'; $file = Join-Path $script:LaptopPc 'clip.ps1'
+        $a = $base + @("`"$file`"", '-Direction', 'push')
+    } else { Send-Result $it.key $false 'unknown laptop action'; return }
+    if (-not (Test-Path -LiteralPath $file)) { Send-Result $it.key $false 'laptop script not found on the PC'; return }
+    $out = ''
+    if ($action -eq 'auto') { $p = Start-Process -FilePath $pw.Source -ArgumentList $a -WindowStyle Hidden -PassThru }
+    else {
+        $out = Join-Path $env:TEMP "mc-pc-laptop-$([int](Unix (Get-Date))).txt"
+        $p = Start-Process -FilePath $pw.Source -ArgumentList $a -WindowStyle Hidden -PassThru -RedirectStandardOutput $out
+    }
+    $null = $p.Handle      # keeps the exit code readable after the process ends
+    $script:laptopJob = @{ key = $it.key; proc = $p; out = $out; action = $action; mode = $mode; started = Get-Date }
+    Write-Log "laptop $action started from the phone (pid $($p.Id))"
+}
+
+function Check-LaptopJob {
+    $j = $script:laptopJob
+    if (-not $j) { return }
+    $age = ((Get-Date) - $j.started).TotalSeconds
+    if (-not $j.proc.HasExited) {
+        if ($j.action -eq 'auto' -and $age -gt 10) {      # the watcher itself: it stays alive on purpose, do not kill it
+            $script:laptopJob = $null; Write-Log 'laptop auto: watcher is running'
+            $script:nextReport = Get-Date; Send-Result $j.key $true 'auto on'
+        } elseif ($age -gt 90) {
+            Write-Log "laptop $($j.action) took over 90 s: giving up"
+            Stop-Process -Id $j.proc.Id -Force -ErrorAction SilentlyContinue
+            if ($j.out) { Remove-Item -LiteralPath $j.out -ErrorAction SilentlyContinue }
+            $script:laptopJob = $null; Send-Result $j.key $false 'timed out'
+        }
+        return
+    }
+    $code = $j.proc.ExitCode
+    $text = ''; if ($j.out) { try { $text = (Get-Content -LiteralPath $j.out -Raw -ErrorAction SilentlyContinue) } catch { }; Remove-Item -LiteralPath $j.out -ErrorAction SilentlyContinue }
+    $script:laptopJob = $null
+    if ("$text".Length -gt 4000) { $text = "$text".Substring(0, 4000) }
+    Write-Log "laptop $($j.action) finished, exit $code"
+    $r = Invoke-LaptopPy 'result' @{ MC_ACTION = $j.action; MC_CODE = "$code"; MC_OUT = "$text"; MC_MODE = $j.mode }
+    if (-not $r) { $r = @{ ok = ($code -eq 0); detail = "exit $code" } }
+    $script:nextReport = Get-Date; $script:nextLaptopStatus = Get-Date    # the Pi shows the new mode at once
+    Send-Result $j.key ([bool]$r.ok) "$($r.detail)"
 }
 
 # ------------------------------------------------------------------ loop views + local chat (0.20, mc_loop.py)
@@ -1071,6 +1200,7 @@ while ($true) {
         if ($reply.digest) { try { Send-Digest } catch { Write-Log "digest: $($_.Exception.Message)" } }
         try { Send-Sessions "$($reply.watch)" } catch { Write-Log "sessions: $($_.Exception.Message)" }
         try { Check-ModeJob } catch { Write-Log "pc-mode job: $($_.Exception.Message)" }
+        try { Check-LaptopJob; Update-LaptopStatus } catch { Write-Log "laptop job: $($_.Exception.Message)" }
         foreach ($c in @($reply.chat_req)) { if ($c) { try { Start-LoopChat $c } catch { Write-Log "chat: $($_.Exception.Message)" } } }
         foreach ($q in @($reply.loop_req)) { if ($q) { try { Invoke-LoopRequest $q } catch { Write-Log "loop: $($_.Exception.Message)" } } }
         if ($reply.ai_watch -and (Get-Date) -ge $script:nextLocalAi) {
@@ -1083,7 +1213,7 @@ while ($true) {
         if ((Get-Date) -ge $nextUsage) { $usage = Get-Usage; $nextUsage = (Get-Date).AddMinutes(10); $nextReport = Get-Date }
         if ((Get-Date) -ge $nextReport) {
             Api 'Post' '/api/pc/report' @{ logs = Tail-Logs; handoff = Handoff-Summary; approvals = (Pending-Approvals)
-                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions); pcmode = (Get-PcModeReport); caps = @('loop', 'chat') } | Out-Null
+                                           parked = Get-Parked; usage = $usage; stats = (Get-PcStats); health = (Get-HealthReport -WithHelpers:($null -ne $usage)); questions = (Get-OpenQuestions); pcmode = (Get-PcModeReport); laptop = (Get-LaptopReport); caps = $(if (Test-LaptopScripts) { @('loop', 'chat', 'laptop') } else { @('loop', 'chat') }) } | Out-Null
             $usage = $null   # numbers are sent once per refresh; mc-pi keeps the last ones
             try { Sync-Docs } catch { Write-Log "docs sync: $($_.Exception.Message)" }
             try { Sync-Skola } catch { Write-Log "skola sync: $($_.Exception.Message)" }
@@ -1105,5 +1235,5 @@ while ($true) {
         if ($_.ErrorDetails.Message) { $msg += ' ' + $_.ErrorDetails.Message.Substring(0, [Math]::Min(300, $_.ErrorDetails.Message.Length)) }
         if ($msg -ne $lastError) { Write-Log "error: $msg"; $lastError = $msg }
     }
-    Start-Sleep -Milliseconds $(if ($reply.watch -or $reply.ai_watch -or $script:modeJob) { 1000 } else { 4000 })   # faster while the phone has a session or the Local AI card open
+    Start-Sleep -Milliseconds $(if ($reply.watch -or $reply.ai_watch -or $script:modeJob -or $script:laptopJob) { 1000 } else { 4000 })   # faster while the phone has a session or the Local AI card open
 }

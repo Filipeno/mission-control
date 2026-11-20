@@ -62,6 +62,17 @@ class HostHttp(unittest.TestCase):
         self.assertEqual(self.post_report(addr=("203.0.113.9", 1)).status_code, 403)
         self.assertEqual(self.post_report(addr=("10.2.0.77", 1)).status_code, 200)
 
+    def test_proxy_headers_refused(self):
+        body = json.dumps({"next_in_s": 15})
+        for hdr in ("X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP", "Cf-Ray"):
+            h = dict(self.hdr(self.host_tok), **{hdr: "10.1.0.50"})
+            self.assertEqual(self.client(LAN).post("/api/host/report", content=body, headers=h).status_code, 403, hdr)
+        # loopback peer (tunnel connector) claiming a LAN address through X-Forwarded-For
+        h = dict(self.hdr(self.host_tok), **{"X-Forwarded-For": "10.1.0.50"})
+        self.assertEqual(self.client(("127.0.0.1", 1)).post("/api/host/report", content=body, headers=h).status_code, 403)
+        self.assertEqual(self.client(("127.0.0.1", 1)).post("/api/host/event", content=body, headers=h).status_code, 403)
+        self.assertEqual(self.client(LAN).post("/api/host/report", content=body, headers=self.hdr(self.host_tok)).status_code, 200)
+
     def test_tokens_are_not_interchangeable(self):
         self.assertEqual(self.post_report(tok="pc-secret-token").status_code, 401)           # PC_TOKEN on /api/host/report
         self.assertEqual(self.post_report(tok=self.app_tok).status_code, 401)                # an app token too
