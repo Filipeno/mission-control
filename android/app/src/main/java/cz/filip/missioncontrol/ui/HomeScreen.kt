@@ -172,6 +172,10 @@ fun HomeScreen(onSettings: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                 return@Column
             }
             PcCard(d, busy || pcPending != null, pcPending, onWake = { act("/api/pc/wake", ok = "Wake sent", pending = "wake") }, onSleep = { sleepDialog = true })
+            d.optJSONObject("hosts")?.optJSONObject("laptop")?.let { lap ->
+                HostCard(lap, busy, onWake = { act("/api/hosts/laptop/wake", ok = "Wake sent (not confirmed until the laptop answers)") },
+                    onChanged = { scope.launch { delay(600); load(force = true) } })
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 RoomTile(d.getJSONObject("room"), Modifier.weight(1f))
                 LightsTile(d.getJSONObject("lights"), Modifier.weight(1f)) { on ->

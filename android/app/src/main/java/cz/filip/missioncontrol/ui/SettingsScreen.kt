@@ -122,7 +122,7 @@ fun SettingsScreen(onBack: () -> Unit, onLoggedOut: () -> Unit, modifier: Modifi
                 Text("Which notifications", color = Mc.Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                 val kinds = st.getJSONObject("kinds")
                 for ((key, label) in listOf("claude" to "Claude (finished, waiting, errors)", "sleep" to "PC sleep warnings",
-                    "room" to "Room sensor", "system" to "System (backups, other)")) {
+                    "room" to "Room sensor", "system" to "System (backups, other)", "host" to "Laptop (battery, streams, backup)")) {
                     ToggleRow(label, kinds.optBoolean(key, true)) { save(JSONObject().put("kinds", JSONObject().put(key, it))) }
                 }
             }
