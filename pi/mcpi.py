@@ -9,6 +9,9 @@ The phone app talks to this; this talks to pc-waker (unchanged) and pushes notif
     python3 mcpi.py token-list           list app tokens
     python3 mcpi.py token-revoke NAME    delete app tokens with this name
     python3 mcpi.py pc-token             print the token the PC helper needs
+    python3 mcpi.py host-token-add ID    make (or replace) a host token, e.g. laptop; printed once
+    python3 mcpi.py host-token-revoke ID delete that host's token
+    python3 mcpi.py host-list            list hosts
 
 Login: the phone sends pc-waker's password once. It is checked against pc-waker's own scrypt hash
 (read from pc-waker.env), so there is one password and changing it in pc-waker applies here too.
@@ -43,6 +46,7 @@ from localai_hub import LocalAiHub
 from loop_hub import Busy, Limited, LoopHub
 from ai_hub import AiHub
 from launch_hub import LaunchHub, MAX_UPLOAD
+from host_hub import HostError, HostHub, parse_body
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = Path(os.environ.get("MC_PI_ENV", HERE / "mc-pi.env"))
@@ -61,6 +65,8 @@ DEFAULTS = {
     # stage 6 (System tab). All optional; see mc-pi.env.example.
     "ROBLOX_UNIVERSE": "", "ROBLOX_KEY": "",
     "HA_URL": "", "HA_TOKEN": "", "HA_TEMP": "", "HA_DISK": "", "HA_UPTIME": "",
+    # the laptop as a second host (host_hub.py); empty = off. HOST_ALLOW_NETS empty = /api/host/* refuses everyone.
+    "HOST_ALLOW_NETS": "", "HOST_LAPTOP_MAC": "", "HOST_LAPTOP_BCAST": "", "HOST_LAPTOP_SOURCE_IP": "", "HOST_LAPTOP_IP": "",
 }
 SERVICES = ["pc-waker", "mission-control", "cloudflared", "bp-gateway"]   # ntfy retired in stage 3
 LOGIN_WINDOW, LOGIN_MAX_FAILS = 15 * 60, 5
@@ -70,7 +76,7 @@ ACTION_PATHS = {"/api/stay-awake", "/api/autosleep"}   # buttons in notification
 SETTINGS_DEFAULTS = {
     "muted": False,
     "quiet_on": True, "quiet_from": "22:00", "quiet_to": "07:00",
-    "kinds": {"claude": True, "sleep": True, "room": True, "system": True},
+    "kinds": {"claude": True, "sleep": True, "room": True, "system": True, "host": True},
     "wake_on_approve": False,   # wake the PC when Filip answers an approval
     "ideas_audio": False,       # ideas: send audio instead of speech-to-text
     "digest_on": True, "digest_time": "20:00",   # the evening digest of the day (quiet hours still apply)
@@ -426,6 +432,9 @@ class AppState:
         self.system = SystemHub(STATE, cfg, load_json, save_json, pi_health)
         self.health = HealthHub(STATE, load_json, save_json, self.deliver, self.claude, self.sessions)
         self.localai = LocalAiHub(self.claude)
+        self.hosts = HostHub(load_json, save_json, self.deliver, self.claude, cfg,
+                             lambda: time.time() - self.helper_at < HELPER_STALE, lambda: self.settings,
+                             lambda: in_quiet(self.settings, datetime.now()), self.system.log)
         self.loop = LoopHub()
         self.ai = AiHub(load_json, save_json, self.deliver, self.claude, self.todos, self.docs,
                         lambda: self.settings, lambda: in_quiet(self.settings, datetime.now()))
@@ -492,6 +501,10 @@ def status_watcher(state: AppState):
             state.pcw_status(fresh=True)
         except Exception as e:   # noqa: BLE001
             print(f"status: {e}", flush=True)
+        try:
+            state.hosts.tick()
+        except Exception as e:   # noqa: BLE001
+            print(f"hosts: {e}", flush=True)
         time.sleep(15)
 
 
@@ -530,6 +543,7 @@ def build_home(state: AppState) -> dict:
         "claude": {"sessions": len(lv["sessions"]) or len(sessions), "waiting": len(titles), "waiting_titles": titles[:5]},
         "pi": pi_health(),
         "todos": {"open": state.todos.open_count()},
+        "hosts": {k: v for k, v in (("laptop", state.hosts.laptop_view()),) if v},
         "recent": (st.get("notify") or {}).get("recent", [])[:10],
         "push": {"devices": len(state.pusher.endpoints),
                  "events_ok_at": state.events.ok_at if state.events else None,
@@ -567,6 +581,17 @@ def make_app(state: AppState):
         tok = state.cfg.get("PC_TOKEN", "")
         if not tok or not hmac.compare_digest(bearer(req).encode(), tok.encode()):
             raise HTTPException(401, "bad token")
+
+    def need_host(req: Request) -> str:
+        """The host id that owns the bearer token. LAN / VPN only (HOST_ALLOW_NETS); loopback, which is what a tunnel
+        connector on the Pi looks like, and everything else is refused before the token is even looked at."""
+        ip = req.client.host if req.client else ""
+        if not state.hosts.net_ok(ip):
+            raise HTTPException(403, "not reachable from this network")
+        hid = state.hosts.host_for_token(bearer(req))
+        if not hid:
+            raise HTTPException(401, "bad token")
+        return hid
 
     def call(method, path, b=None):
         try:
@@ -755,6 +780,7 @@ def make_app(state: AppState):
         state.system.on_pc_report(d.get("stats"))
         state.health.on_pc_report(d.get("health"))
         state.localai.on_mode(d.get("pcmode"))
+        state.hosts.on_pc_report(d)
         state.loop.on_caps(d.get("caps"))
         state.ai.on_pc_questions(d.get("questions"))
         for a in state.claude.on_report(d):
@@ -855,6 +881,7 @@ def make_app(state: AppState):
         state.health.on_result(d)
         state.ai.on_result(d)
         state.localai.on_result(d)
+        state.hosts.on_result(d)
         return {"ok": True}
 
     # ------------------------------------------------------------ starting work from the phone (stage 11c)
@@ -1411,6 +1438,41 @@ def make_app(state: AppState):
             raise HTTPException(409, str(e))
         return {"ok": True, "started": started}
 
+    # ------------------------------------------------------------ the laptop as a second host
+    @app.post("/api/host/report")
+    async def host_report(req: Request):
+        hid = need_host(req)
+        try:
+            state.hosts.on_report(hid, parse_body(await req.body()))
+        except HostError as e:
+            raise HTTPException(e.code, e.msg)
+        return {"ok": True}
+
+    @app.post("/api/host/event")
+    async def host_event(req: Request):
+        hid = need_host(req)
+        try:
+            state.hosts.on_event(hid, parse_body(await req.body()))
+        except HostError as e:
+            raise HTTPException(e.code, e.msg)
+        return {"ok": True}
+
+    @app.post("/api/hosts/laptop/wake")
+    def laptop_wake(req: Request):
+        need_app(req)
+        try:
+            return state.hosts.request_wake()
+        except HostError as e:
+            raise HTTPException(e.code, e.msg)
+
+    @app.post("/api/hosts/laptop/{action}")
+    def laptop_action(req: Request, action: str, d: dict = Body(default={})):
+        need_app(req)
+        try:
+            return state.hosts.request(action, _hash_token(bearer(req)), d)
+        except HostError as e:
+            raise HTTPException(e.code, e.msg)
+
     @app.post("/api/system/localai/report")
     def system_localai_report(req: Request):
         need_app(req)
@@ -1614,6 +1676,13 @@ def main():
                     print(f"earnings NOT readable: {e}")
             except RuntimeError as e:
                 print(f"key saved, but the test call failed: {e}")
+    elif cmd == "host-token-add" and len(sys.argv) > 2:
+        print(AppState(load_config()).hosts.add_token(sys.argv[2]))
+    elif cmd == "host-token-revoke" and len(sys.argv) > 2:
+        print("revoked" if AppState(load_config()).hosts.revoke(sys.argv[2]) else "no such host")
+    elif cmd == "host-list":
+        for i, name, created, seen in AppState(load_config()).hosts.list_hosts():
+            print(i, name, datetime.fromtimestamp(created).strftime("%Y-%m-%d %H:%M") if created else "-")
     elif cmd == "pc-token":
         print(load_config()["PC_TOKEN"])
     elif cmd == "serve":
